@@ -123,7 +123,10 @@ annotations are kept for that), but none is needed.
    children put together by the rules, then ordered: by aggregation in the rules' order (those
    no rule names last); within one, by key, or as written (the set's order, then document
    order) for each and ordered aggregations. A merged node (`MNode`) is a handle like `Node`: its
-   name, key, key path, parent, children, its child by name and key, and its fragments, the
+   name, key, key path, parent, children, its child by name and key, the rule that put it
+   together with its siblings (`rule`, and `rule_number`, its index in the rules given; none
+   for the root, a child no rule names and an empty handle; a child of a keyed rule missing its
+   key has the rule too, and is not `keyed`), and its fragments, the
    `(document, node)` pairs it is made of, which is all it keeps: nothing is copied. Built top
    down, so a node's children are consecutive and so are its fragments; a child by name and
    key is a read of up to 16 children or one hash probe, and a node by its key path one probe

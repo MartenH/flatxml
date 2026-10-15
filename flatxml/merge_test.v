@@ -1218,9 +1218,69 @@ fn test_a_node_names_the_rule_that_put_it_together() {
 		'a.xml': '<r><pkg><n>A</n><x>1</x><z/></pkg></r>'
 	}, pkg_rules)
 	root := m.root()
-	assert root.rule() == none
+	assert root.rule() == none && root.rule_number() == none
 	pkg := root.kids()[0]
-	assert pkg.rule()? == 0
+	assert pkg.rule_number()? == 0 && pkg.rule()?.key == ['n']
 	kids := pkg.kids()
-	assert kids.map(it.rule() or { -1 }) == [1, 2, -1]
+	assert kids.map(it.rule_number() or { -1 }) == [1, 2, -1]
+	assert kids[0].rule()?.children == ['n'] && kids[2].rule() == none
+	// an empty handle
+	assert MNode{}.rule() == none && MNode{}.rule_number() == none
+}
+
+fn test_the_rule_by_path_class_and_any_parent() {
+	// a/b: the path-scoped rule for b under a, the plain one elsewhere; `*` for any parent
+	rules := '
+r a,c single merge
+a b single merge
+c b single merge
+a/b i key=@k merge
+b i
+* t single merge
+'
+	m := merged({
+		'a.xml': '<r><a><b><i k="1"/><t/></b></a><c><b><i k="1"/><t/></b></c></r>'
+	}, rules)
+	a := m.root().child('a', '')
+	c := m.root().child('c', '')
+	ai := a.kids()[0].kids()
+	ci := c.kids()[0].kids()
+	assert ai[0].rule_number()? == 3 && ai[0].keyed()
+	assert ci[0].rule_number()? == 4 && !ci[0].keyed()
+	assert ai[1].rule_number()? == 5 && ci[1].rule_number()? == 5
+	// a class: the classifier names b under c `%under_c`
+	s := set_of({
+		'a.xml': '<r><a><b><i/></b></a><c><b><i/></b></c></r>'
+	})
+	mut rs := parse_rules('
+r a,c single merge
+a b single merge
+c b single merge
+%under_c i single merge
+b i
+') or {
+		panic(err)
+	}
+	classified := s.merge(RuleSet{
+		...rs
+		classify: fn (p Parent) string {
+			return if p.name == 'b' && p.ancestors.len > 0 && p.ancestors[0].name == 'c' {
+				'under_c'
+			} else {
+				''
+			}
+		}
+	}) or { panic(err) }
+	ca := classified.root().child('a', '').kids()[0].kids()[0]
+	cc := classified.root().child('c', '').kids()[0].kids()[0]
+	assert ca.rule_number()? == 4 && cc.rule_number()? == 3
+}
+
+fn test_a_child_missing_its_key_has_the_keyed_rule() {
+	m := merged({
+		'a.xml': '<r><pkg><n>A</n></pkg><pkg/></r>'
+	}, pkg_rules)
+	kids := m.root().kids()
+	assert kids.all(it.rule_number()? == 0)
+	assert kids[0].keyed() && !kids[1].keyed()
 }
