@@ -7,9 +7,11 @@ import strings
 // source.
 
 // escape_text is s written as character data: `&`, `<` and `>` as entity references, and a
-// carriage return as `&#13;`, which would otherwise read back as a line break.
+// carriage return as `&#13;`, which would otherwise read back as a line break. Text that is only
+// whitespace is written as character references, since whitespace-only text between tags is not
+// read as text.
 pub fn escape_text(s string) string {
-	if !s.contains_any('&<>\r') {
+	if !s.contains_any('&<>\r') && !is_blank(s) {
 		return s
 	}
 	mut sb := strings.new_builder(s.len + 16)
@@ -47,7 +49,28 @@ pub fn cdata_section(s string) string {
 	return sb.str()
 }
 
+// is_blank reports whether s is whitespace and nothing else, and not empty.
+fn is_blank(s string) bool {
+	for c in s {
+		if !is_ws(c) {
+			return false
+		}
+	}
+	return s.len > 0
+}
+
 fn put_text(mut sb strings.Builder, s string) {
+	if is_blank(s) {
+		for b in s {
+			sb.write_string(match b {
+				`\t` { '&#9;' }
+				`\n` { '&#10;' }
+				`\r` { '&#13;' }
+				else { '&#32;' }
+			})
+		}
+		return
+	}
 	for b in s {
 		match b {
 			`&` { sb.write_string('&amp;') }
@@ -91,21 +114,23 @@ fn put_cdata(mut sb strings.Builder, s string) {
 }
 
 // outer_xml is node i written from the tree's parts: an element with its attributes and content,
-// or a text node's text. The namespace declarations in scope at i that i does not make itself
-// are written on it, so it reads the same wherever it is put; when no default namespace is in
-// scope none is declared, so inside an element that declares one, its unprefixed names would take
-// that one. Comments, processing instructions and whitespace between tags are not kept; a text
-// read from CDATA is written as CDATA.
+// a text node's text, or for node 0 the whole document (the bytes before and after the root as
+// they are). The namespace declarations in scope at an element that it does not make itself are
+// written on it, so it reads the same wherever it is put; when no default namespace is in scope
+// none is declared, so inside an element that declares one, its unprefixed names would take that
+// one. Comments, processing instructions and whitespace between tags are not kept; a text read
+// from CDATA is written as CDATA.
 pub fn (d &Doc) outer_xml(i u32) string {
-	mut sb := strings.new_builder(256)
-	mut e := new_emitter(d, mut sb, ModePlan{ mode: .rewrite })
-	if d.tag[i] == text_tag {
+	mut e := emitter_in(d, ModePlan{ mode: .rewrite }, 256)
+	if i == 0 {
+		e.walk(0) or {}
+	} else if d.tag[i] == text_tag {
 		e.node_from_parts(i) or {}
 	} else {
 		e.element_from_parts(i, true) or {}
 	}
-	e.flush() or {}
-	return sb.str()
+	e.settle() or {}
+	return e.buf.str()
 }
 
 // node_from_parts writes node i from the tree's parts, its child nodes as the plan says.
@@ -140,18 +165,24 @@ fn (mut e Emitter) element_from_parts(i u32, carry_ns bool) ! {
 		return
 	}
 	e.put('>')!
-	if d.text_len[i] != 0 {
-		e.text(d.text(i), d.is_cdata(i))!
-	} else {
-		mut c := d.first_child(i)
-		for c != no_node {
-			e.node(c)!
-			c = d.next_sibling(c)
-		}
-	}
+	e.content_from_parts(i)!
 	e.put('</')!
 	e.put(d.name(i))!
 	e.put('>')!
+}
+
+// content_from_parts writes element i's content: its text, or its child nodes as the plan says.
+fn (mut e Emitter) content_from_parts(i u32) ! {
+	d := e.d
+	if d.text_len[i] != 0 {
+		e.text(d.text(i), d.is_cdata(i))!
+		return
+	}
+	mut c := d.first_child(i)
+	for c != no_node {
+		e.node(c)!
+		c = d.next_sibling(c)
+	}
 }
 
 // attr writes ` name="value"`, between the quote attr_quote chooses.
@@ -215,47 +246,13 @@ fn is_ns_decl_name(name string) bool {
 	return name == 'xmlns' || name.starts_with('xmlns:')
 }
 
-// inner_xml is element i's content written back as XML: child elements with their attributes,
-// and text, escaped. It is a re-serialisation of the tree, not a copy of the source: comments,
-// processing instructions, CDATA sections, entity spellings and whitespace between tags are not
-// kept, and neither are namespace declarations made on ancestors of i.
+// inner_xml is element i's content written from the tree's parts, as `outer_xml` writes it:
+// child elements with their attributes, and text, escaped. Comments, processing instructions,
+// entity spellings and whitespace between tags are not kept, and neither are namespace
+// declarations made on ancestors of i.
 pub fn (d &Doc) inner_xml(i u32) string {
-	mut sb := strings.new_builder(64)
-	d.write_content(mut sb, i)
-	return sb.str()
-}
-
-fn (d &Doc) write_content(mut sb strings.Builder, i u32) {
-	if d.text_len[i] != 0 {
-		put_text(mut sb, d.text(i))
-		return
-	}
-	mut c := d.first_child(i)
-	// Each child in document order: text as it reads, an element with its content.
-	for c != no_node {
-		if d.is_text(c) {
-			put_text(mut sb, d.text(c))
-		} else {
-			sb.write_u8(`<`)
-			sb.write_string(d.name(c))
-			lo, hi := d.attr_range(c)
-			for a := lo; a < hi; a++ {
-				sb.write_u8(` `)
-				sb.write_string(d.attr_name(a))
-				sb.write_string('="')
-				put_attr(mut sb, d.attr_value(a), `"`)
-				sb.write_u8(`"`)
-			}
-			if d.first_child(c) == no_node && d.text_len[c] == 0 {
-				sb.write_string('/>')
-			} else {
-				sb.write_u8(`>`)
-				d.write_content(mut sb, c)
-				sb.write_string('</')
-				sb.write_string(d.name(c))
-				sb.write_u8(`>`)
-			}
-		}
-		c = d.next_sibling(c)
-	}
+	mut e := emitter_in(d, ModePlan{ mode: .rewrite }, 64)
+	e.content_from_parts(i) or {}
+	e.settle() or {}
+	return e.buf.str()
 }

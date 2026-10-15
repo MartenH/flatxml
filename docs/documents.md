@@ -95,13 +95,16 @@ Round trips, which need no oracle:
    descendant, read on to its end tag) rather than stored: on the 500 MB benchmark an array
    filled at parse time made the parse no faster or slower than the noise (best of 15, 1,060 ms
    against 1,027 ms) but cost 4 bytes a node (52 MB, 28 to 32 bytes a node), while finding the end
-   of every one of its 13M nodes on demand takes 150–190 ms, and a write asks it only of the nodes
-   it copies or walks. Written whole, the 500 MB document takes 0.3–0.45 s; node by node (each
-   node located on its own, adjacent copies joined into one) 0.67 s; every node from the tree
-   1.4–1.6 s. Written unchanged, every file is itself, byte for byte, both whole and node by node,
-   and written from the tree it reads as the same tree: `testdata/`, generated documents up to
-   500 MB, 560 real-world files (169 MB), 34,187 other XML files (224 MB), and 10,809 mutations of
-   the test documents that parse. The emitter takes a plan that says, node by node, whether to
+   of every one of its 13M nodes on demand takes 150–290 ms, and a write asks it only of the nodes
+   it copies or walks. Written into memory, the 500 MB document takes 0.35–0.41 s whole; 0.62–0.85
+   s node by node (each node located on its own, adjacent copies joined into one); 1.9–2.4 s with
+   every node from the tree. To a file, synced to disk before it replaces the old one: 1.1 s whole.
+   Written unchanged, every file is itself, byte for byte, both whole and node by node, and written
+   from the tree it reads as the same tree, every run of text compared whitespace included:
+   `testdata/`, generated documents up to 500 MB, 560 real-world files (169 MB), 34,187 other XML
+   files (224 MB), and 10,809 mutations of the test documents that parse. (Text that is only
+   whitespace, written as references in the source, must be written as references again, or a
+   parser drops it: 31 of the 34,187 files hold such text.) The emitter takes a plan that says, node by node, whether to
    copy it whole, copy its tags and walk its children, or write it anew, which is where edits
    plug in; escaping (text, attribute values with the quote that needs fewer escapes, CDATA) and
    an element written from the tree's parts with the namespace declarations in scope are in

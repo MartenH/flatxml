@@ -82,7 +82,8 @@ are, so a document written unchanged is its file, byte for byte. Only a node's s
 its end is found when it is asked for, by reading on from the end of its last descendant to its
 end tag, so the parse and the 28 bytes a node takes are unchanged. What is not copied is written
 from the tree's parts: names as interned, values decoded and escaped again for where they go
-(text, an attribute value between the quote that needs fewer escapes, CDATA), and an element
+(text, with text that is only whitespace as character references so that it is still read as
+text; an attribute value between the quote that needs fewer escapes; CDATA), and an element
 written on its own (`outer_xml`) carries the namespace declarations in scope where it was. Edits
 will be written the same way: copied around what changed ([docs/documents.md](docs/documents.md)).
 
@@ -163,12 +164,13 @@ Results marked *earlier* predate this repository; the parser has not changed sin
   files of 20 MB and 100 MB and on a 142 MB merged one.
 - **Writing back**: written unchanged, every file is itself byte for byte, both copied whole and
   node by node (each node located on its own, the bytes between nodes copied), and written from
-  the tree it parses to the same tree, on `testdata/`, generated documents up to 500 MB, 560
-  real-world configuration files (169 MB) and 34,187 other XML files found on one machine
-  (224 MB). A unit test covers each construct
-  that has to survive (CDATA, comments and processing instructions between and inside elements,
-  a DOCTYPE with an internal subset, CRLF, references, `<a/>` beside `<a></a>`, both quotes,
-  whitespace the tree drops, what follows the root, a byte order mark).
+  the tree it parses to the same tree (every run of text compared, whitespace included), on
+  `testdata/`, generated documents up to 500 MB, 560 real-world configuration files (169 MB) and
+  34,187 other XML files found on one machine (224 MB). A unit test covers each construct that
+  has to survive (CDATA, comments and processing instructions between and inside elements, a
+  DOCTYPE with an internal subset, CRLF, references, whitespace written as references, `<a/>`
+  beside `<a></a>`, both quotes, whitespace the tree drops, what follows the root, a byte order
+  mark).
 - **Mutation fuzzing** against expat (`tools/fuzz_vs_expat.py`): random edits, plus namespace
   edits that keep a document well-formed (renaming a prefix, dropping a declaration); 24,000 cases
   over six seeds, with and without namespaces. No crash, no valid document refused, no tree

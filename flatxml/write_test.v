@@ -112,6 +112,8 @@ fn test_round_trip_constructs() {
 		'<élément å="ä">ö</élément>',
 		'<a><b k="/"/><c k=">"/></a>',
 		'<a  >  </a  >',
+		'<r><a>&#x20;</a><b>x<c/>&#10;</b></r>',
+		'<a>&#9;&#32;<b/>&#13;&#10;<!-- c -->&#32;<c/>\t</a>',
 	]
 	for s in cases {
 		round_trips(s)
@@ -170,6 +172,30 @@ fn test_write_file_replaces_its_own_source() {
 	assert os.read_file(other) or { '' } == src
 	assert (os.stat(path) or { panic(err) }).mode & 0o777 == 0o600
 	assert os.ls(os.dir(path)) or { [] }.filter(it.starts_with(os.file_name(path)) && it.ends_with('.tmp')) == []
+	// a new file gets the mode any new file gets
+	plain := path + '.plain'
+	os.write_file(plain, src) or { panic(err) }
+	defer {
+		os.rm(plain) or {}
+	}
+	assert (os.stat(other) or { panic(err) }).mode & 0o7777 == (os.stat(plain) or { panic(err) }).mode & 0o7777
+}
+
+fn test_write_file_through_a_link_writes_its_target() {
+	dir := os.join_path(os.temp_dir(), 'flatxml_link_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	target := os.join_path(dir, 'target.xml')
+	link := os.join_path(dir, 'link.xml')
+	os.write_file(target, '<a/>') or { panic(err) }
+	os.symlink(target, link) or { panic(err) }
+	d := parsed('<b>new</b>')
+	d.write_file(link) or { panic(err) }
+	assert os.is_link(link)
+	assert os.read_file(target) or { '' } == '<b>new</b>'
+	assert os.ls(dir) or { [] }.len == 2
 }
 
 fn test_escaping() {
@@ -211,6 +237,11 @@ fn test_outer_xml_carries_namespaces() {
 	assert alone.ns_uri(alone.ns_of(c)) == 'urn:p'
 	lo, _ := alone.attr_range(c)
 	assert alone.ns_uri(alone.attr_ns_of(lo)) == 'urn:q2'
+	// the document node is the whole document
+	whole := '<?xml version="1.0"?>\n<!-- c -->\n<r><!-- c --><a k="1"/></r>\n'
+	w := parsed(whole)
+	assert w.outer_xml(0) == written(w, .rewrite)
+	assert w.outer_xml(0) == '<?xml version="1.0"?>\n<!-- c -->\n<r><a k="1"/></r>\n'
 	// a text node is its text
 	m := parsed('<m>a<x/>b &amp; c</m>')
 	assert m.outer_xml(m.next_sibling(m.child_named(1, 'x'))) == 'b &amp; c'
@@ -244,9 +275,8 @@ fn test_a_plan_writes_one_node_and_copies_the_rest() {
 	d := parsed(s)
 	b := d.child_named(1, 'b')
 	c := d.child_named(b, 'c')
-	mut sb := strings.new_builder(64)
-	mut e := new_emitter(d, mut sb, OnePlan{ d: d, changed: c })
+	mut e := emitter_in(d, OnePlan{ d: d, changed: c }, 64)
 	e.walk(0) or { panic(err) }
-	e.flush() or { panic(err) }
-	assert sb.str() == s.replace('<c  k = "2" >y &amp; z</c>', '<new k="&lt;&amp;&gt;"><c k="2">y &amp; z</c></new>')
+	e.settle() or { panic(err) }
+	assert e.buf.str() == s.replace('<c  k = "2" >y &amp; z</c>', '<new k="&lt;&amp;&gt;"><c k="2">y &amp; z</c></new>')
 }

@@ -35,31 +35,34 @@ pub:
 
 // write writes the document as XML to w.
 pub fn (d &Doc) write(mut w io.Writer, opts WriteOptions) ! {
-	mut e := new_emitter(d, mut w, ModePlan{ mode: opts.mode })
+	mut e := emitter_to(d, mut w, ModePlan{ mode: opts.mode })
 	e.walk(0)!
 	e.flush()!
 }
 
 // write_file writes the document as XML to path, through a temporary file in the same directory
-// that replaces path once it is complete, so the document may be written over its own file. A
-// file that is replaced keeps its permissions.
+// that replaces path once it is complete and on disk, so the document may be written over its own
+// file. A file that is replaced keeps its permissions; a symbolic link stays one, and the file it
+// points to is written.
 pub fn (d &Doc) write_file(path string, opts WriteOptions) ! {
-	mode := if st := os.stat(path) { st.mode } else { u32(0o644) }
-	tmp := '${path}.${os.getpid()}.tmp'
-	mut f := create_file(tmp, mode)!
+	target := if os.is_link(path) { os.real_path(path) } else { path }
+	keep := if st := os.stat(target) { ?u32(st.mode) } else { ?u32(none) }
+	tmp := '${target}.${os.getpid()}.tmp'
+	mut f := create_file(tmp, keep)!
 	d.write(mut f, opts) or {
 		f.close() or {}
 		os.rm(tmp) or {}
 		return err
 	}
-	f.close() or {
+	f.sync_and_close() or {
 		os.rm(tmp) or {}
 		return err
 	}
-	os.rename(tmp, path) or {
+	os.rename(tmp, target) or {
 		os.rm(tmp) or {}
 		return err
 	}
+	sync_dir(os.dir(target))!
 }
 
 // span is the bytes of node i in the source, `lo .. hi`: an element from its `<` to the end of
@@ -220,27 +223,47 @@ fn (p ModePlan) write(mut e Emitter, i u32) ! {
 
 const out_buf_size = 1 << 16
 
-// Emitter writes XML to an io.Writer: ranges of the source, and text it is given. Adjacent
-// ranges are joined into one before they are written, so copying a document node by node
-// writes what copying it whole does. Small pieces are gathered in a buffer; a large range goes to
-// the writer directly. Whatever writes to `buf` settles the pending range first.
+// Emitter writes XML: ranges of the source, and text it is given. Adjacent ranges are joined into
+// one before they are written, so copying a document node by node writes what copying it whole
+// does. An emitter either collects everything in `buf`, or passes it on to an io.Writer: small
+// pieces gathered in `buf`, a large range directly. Whatever writes to `buf` settles the pending
+// range first.
 struct Emitter {
 	d    &Doc
 	plan Plan
 mut:
-	w   io.Writer
-	buf strings.Builder
+	w      io.Writer = NoWriter{}
+	passes bool // to w
+	buf    strings.Builder
 	// the source range copied but not yet written
 	lo u32
 	hi u32
 }
 
-fn new_emitter(d &Doc, mut w io.Writer, plan Plan) Emitter {
+// NoWriter is the writer of an emitter that keeps what it writes.
+struct NoWriter {}
+
+fn (mut w NoWriter) write(_ []u8) !int {
+	return error('nothing to write to')
+}
+
+// emitter_to is an emitter that passes what it writes on to w.
+fn emitter_to(d &Doc, mut w io.Writer, plan Plan) Emitter {
+	return Emitter{
+		d:      d
+		w:      w
+		passes: true
+		plan:   plan
+		buf:    strings.new_builder(int_min(d.src_len + 64, out_buf_size))
+	}
+}
+
+// emitter_in is an emitter that keeps what it writes in its buffer, which starts at cap bytes.
+fn emitter_in(d &Doc, plan Plan, cap int) Emitter {
 	return Emitter{
 		d:    d
-		w:    w
 		plan: plan
-		buf:  strings.new_builder(out_buf_size)
+		buf:  strings.new_builder(cap)
 	}
 }
 
@@ -262,7 +285,7 @@ fn (mut e Emitter) settle() ! {
 	if n <= 0 {
 		return
 	}
-	if n >= out_buf_size {
+	if n >= out_buf_size && e.passes {
 		e.flush_buf()!
 		write_all(mut e.w, unsafe { (e.d.src + e.lo).vbytes(n) })!
 	} else {
@@ -282,7 +305,7 @@ fn (mut e Emitter) put(s string) ! {
 // spill passes the buffer on once it is full.
 @[inline]
 fn (mut e Emitter) spill() ! {
-	if e.buf.len >= out_buf_size {
+	if e.buf.len >= out_buf_size && e.passes {
 		e.flush_buf()!
 	}
 }
@@ -294,13 +317,15 @@ fn (mut e Emitter) flush() ! {
 }
 
 fn (mut e Emitter) flush_buf() ! {
-	if e.buf.len > 0 {
+	if e.buf.len > 0 && e.passes {
 		write_all(mut e.w, []u8(e.buf))!
 		e.buf.go_back_to(0)
 	}
 }
 
-fn write_all(mut w io.Writer, b []u8) ! {
+// write_all writes all of b to w, or fails: a writer that takes nothing is an error, not a reason
+// to try again.
+pub fn write_all(mut w io.Writer, b []u8) ! {
 	mut done := 0
 	for done < b.len {
 		n := w.write(b[done..])!
@@ -352,8 +377,13 @@ fn (mut e Emitter) walk(i u32) !u32 {
 			.content {
 				e.walk(c)!
 			}
-			else {
-				e.node(c)!
+			.whole {
+				a, b := d.span(c)
+				e.copy(a, b)!
+				b
+			}
+			.write {
+				e.plan.write(mut e, c)!
 				d.span_end(c)
 			}
 		}

@@ -352,14 +352,16 @@ fn dump_events(path string, ns bool) {
 		}
 	}
 	mut out := os.stdout()
-	dump_tree(d, ns, mut out) or {
+	dump_tree(d, ns, true, mut out) or {
 		eprintln('flatxml: ${err}')
 		exit(1)
 	}
 }
 
-// dump_tree writes the lines of `flatxml dump` for d to out.
-fn dump_tree(d &flatxml.Doc, ns bool, mut out io.Writer) ! {
+// dump_tree writes the lines of `flatxml dump` for d to out. With trim, a run of text is written
+// without its leading and trailing whitespace, and not at all when that is all it holds, as
+// tools/check_vs_expat.py compares it; without, every run as it reads.
+fn dump_tree(d &flatxml.Doc, ns bool, trim bool, mut out io.Writer) ! {
 	mut sb := strings.new_builder(1 << 20)
 	mut depth := []u32{len: d.len()}
 	mut run := strings.new_builder(256)
@@ -371,14 +373,14 @@ fn dump_tree(d &flatxml.Doc, ns bool, mut out io.Writer) ! {
 		depth[k] = depth[p] + 1
 		if d.is_text(i) {
 			if run.len > 0 && run_parent != p {
-				flush_run(mut sb, mut run, depth[run_parent])
+				flush_run(mut sb, mut run, depth[run_parent], trim)
 			}
 			run.write_string(d.text(i))
 			run_parent = p
 			continue
 		}
 		if run.len > 0 {
-			flush_run(mut sb, mut run, depth[run_parent])
+			flush_run(mut sb, mut run, depth[run_parent], trim)
 		}
 		if ns {
 			sb.write_string('E ${depth[k]} ${expanded(d.ns_uri(d.ns_of(i)), d.local_name(i))}')
@@ -397,25 +399,17 @@ fn dump_tree(d &flatxml.Doc, ns bool, mut out io.Writer) ! {
 		sb.write_u8(`\n`)
 		if d.text_len[i] != 0 {
 			run.write_string(d.text(i))
-			flush_run(mut sb, mut run, depth[k])
+			flush_run(mut sb, mut run, depth[k], trim)
 		}
 		if sb.len > 1 << 20 {
-			write_all(mut out, sb)!
+			flatxml.write_all(mut out, sb)!
 			sb.go_back_to(0)
 		}
 	}
 	if run.len > 0 {
-		flush_run(mut sb, mut run, depth[run_parent])
+		flush_run(mut sb, mut run, depth[run_parent], trim)
 	}
-	write_all(mut out, sb)!
-}
-
-// write_all writes all of b, or fails: a truncated dump must not look like a whole one.
-fn write_all(mut out io.Writer, b []u8) ! {
-	mut done := 0
-	for done < b.len {
-		done += out.write(b[done..])!
-	}
+	flatxml.write_all(mut out, sb)!
 }
 
 // one_line is s as one line of a batch answer: every control character a space, so a quoted value
@@ -439,8 +433,8 @@ fn expanded(uri string, local string) string {
 	return if uri == '' { local } else { '{${uri}}${local}' }
 }
 
-fn flush_run(mut sb strings.Builder, mut run strings.Builder, depth u32) {
-	t := run.str().trim(' \t\n\r')
+fn flush_run(mut sb strings.Builder, mut run strings.Builder, depth u32, trim bool) {
+	t := if trim { run.str().trim(' \t\n\r') } else { run.str() }
 	if t.len > 0 {
 		sb.write_string('T ${depth} ${esc(t)}\n')
 	}
@@ -625,13 +619,13 @@ fn round_trip(args []string) bool {
 }
 
 // tree_difference is why the document xml does not read as the same tree as d, if it does not:
-// compared as `flatxml dump` writes them.
+// compared as `flatxml dump` writes them, with every run of text as it reads, whitespace included.
 fn tree_difference(d &flatxml.Doc, xml string) ?string {
 	mut again := flatxml.parse_string(xml) or { return 'written, it does not parse: ${err}' }
 	mut a := strings.new_builder(1 << 20)
 	mut b := strings.new_builder(1 << 20)
-	dump_tree(d, false, mut a) or { return err.msg() }
-	dump_tree(again, false, mut b) or { return err.msg() }
+	dump_tree(d, false, false, mut a) or { return err.msg() }
+	dump_tree(again, false, false, mut b) or { return err.msg() }
 	ta := a.str()
 	tb := b.str()
 	again.free()

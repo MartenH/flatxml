@@ -234,9 +234,11 @@ fn test_every_prefix_is_handled() {
 	assert ok == 1 // only the prefix that drops the final newline is still complete
 }
 
-fn test_inner_xml_writes_content_back() {
+fn test_inner_xml_writes_content_back() ! {
 	d := parse_string('<r><a k="1 &amp; &quot;2&quot;">x &lt; y<b/></a>tail<!-- c --><c>t</c></r>') or { panic(err) }
-	assert d.inner_xml(d.root()) == '<a k="1 &amp; &quot;2&quot;">x &lt; y<b/></a>tail<c>t</c>'
+	// a value holding `"` and no `'` is written between `'`, and CDATA as CDATA
+	assert d.inner_xml(d.root()) == '<a k=\'1 &amp; "2"\'>x &lt; y<b/></a>tail<c>t</c>'
+	assert parse_string('<r><![CDATA[<x>]]></r>')!.inner_xml(1) == '<![CDATA[<x>]]>'
 	assert d.inner_xml(d.first_child(d.root())) == 'x &lt; y<b/>'
 	// written back, it parses to the same content
 	again := parse_string('<r>' + d.inner_xml(d.root()) + '</r>') or { panic(err) }
