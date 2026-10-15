@@ -261,6 +261,11 @@ Results marked *earlier* predate this repository; the parser has not changed sin
   DOCTYPE with an internal subset, CRLF, references, whitespace written as references, `<a/>`
   beside `<a></a>`, both quotes, whitespace the tree drops, what follows the root, a byte order
   mark).
+- **Edits**: 30,000 random edit sets (every kind of edit, on random documents with comments,
+  mixed content, CDATA and namespaces), written and read back, give the tree a model of the same
+  edits gives, every name in its namespace, and every element no edit reached byte for byte what
+  it was. The same random edits made by lxml (`tools/edits_vs_lxml.py`) give the same tree on 560
+  real-world configuration files (28,000 edits) and 33,377 other XML files (333,770 edits).
 - **Mutation fuzzing** against expat (`tools/fuzz_vs_expat.py`): random edits, plus namespace
   edits that keep a document well-formed (renaming a prefix, dropping a declaration); 24,000 cases
   over six seeds, with and without namespaces. No crash, no valid document refused, no tree

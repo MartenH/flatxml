@@ -235,9 +235,11 @@ Round trips, which need no oracle:
    element and namespace as expected, the bytes before and after the root unchanged, and every
    element with no edit below it byte for byte what it was. Against lxml making the same edits
    (`tools/edits_vs_lxml.py`): on the 560 real-world files, three seeds of 10 to 20 edits each
-   (28,000 edits), every tree the same; written, flatxml's files differ from the originals in
-   64,804 lines for the first seed where lxml's serialisation of the same trees differs in
-   81,007. An edited 500 MB document writes in the time an unedited one does (0.66–0.83 s
+   (28,000 edits), every tree the same; and on 33,377 other XML files found on one machine
+   (333,770 edits), every tree the same (543 skipped: not read by one of the two, or not UTF-8).
+   Written, flatxml's files differ from the originals in 64,804 lines for the first seed on the
+   560 where lxml's serialisation of the same trees differs in 77,150, and in 359,437 on the
+   others where lxml's differs in 1,015,501. An edited 500 MB document writes in the time an unedited one does (0.66–0.83 s
    against 0.70–0.87 s to a file).
 
    Applying a diff (`flatxml apply`) is a thin layer on this: a removed node is `remove`d, a moved
