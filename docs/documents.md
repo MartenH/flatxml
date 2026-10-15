@@ -45,15 +45,16 @@ annotations are kept for that), but none is needed.
    and the classifier is asked only when a rule names a class, so the rules cost nothing per child
    that the names alone did not. A rule is one of three kinds:
    - **keyed**: the key is the texts at one or more paths below the child (`NAME`, `ITEM/ID`,
-     `@id`, `ITEM/@id`), or what a callback returns, where paths cannot say it. A part ending in
-     `+` reads every element at its path, in order, its text or attribute ('' where the attribute
-     is absent, so the number and order of the elements count), joined with a separator text
-     cannot hold (`REFS/REF+`); a key is shown with its parts joined by `,` and the occurrences of
-     a part by `|`. With `merge`, children of one key (from any files) are one child; without, the
-     second is a collision. A child missing every part of its key is, per rule (`keyless`),
-     reported and kept as a child of its own, or the one child of its name with the empty key,
-     which merges like a single child and, like one, is transparent to keys below it; there, a key
-     with no text in any part is the empty key too, as an absent one is;
+     `@id`, `ITEM/@id`, or the child's own text: `.`, its text beside its children without the
+     indentation, absent when it has none), or what a callback returns, where paths cannot say it.
+     A part ending in `+` reads every element at its path, in order, its text or attribute (''
+     where the attribute is absent, so the number and order of the elements count), joined with a
+     separator text cannot hold (`REFS/REF+`); a key is shown with its parts joined by `,` and the
+     occurrences of a part by `|`. With `merge`, children of one key (from any files) are one
+     child; without, the second is a collision. A child missing every part of its key is, per rule
+     (`keyless`), reported and kept as a child of its own, or the one child of its name with the
+     empty key, which merges like a single child and, like one, is transparent to keys below it;
+     there, a key with no text in any part is the empty key too, as an absent one is;
    - **single**: one child of each name, identified by its name, so the occurrences in every
      fragment of the parent are one child (with `merge`; without, the second is a collision);
    - **each**: every occurrence is a child of its own. A child no rule names is of this kind.
@@ -62,13 +63,17 @@ annotations are kept for that), but none is needed.
    have a **max**, both over all the names it holds together. Keys are compared as written or, for
    the whole set, ignoring ASCII case, and the set can name attributes whose values may differ.
    Paths compile once to name ids. An element's identity is the path of keys from the root, the
-   same in every file that holds it: a key is unique in its **scope**, the nearest ancestor that
-   is not single (a keyed or each child, or the root), so a single child (a wrapper) is
-   transparent to keys. The rules' order is the order of their aggregations among a node's
-   children. `parse_rules` reads them from text, one per line (`ITEMS ITEM key=NAME merge`), with
-   the set's settings on lines that start with `!`, which no element name can (`!fold`,
-   `!ignore ID`). A schema's annotations can be read into rules, by the caller that knows what
-   they mean.
+   same in every file that holds it: a key is unique in its **scope**, the nearest ancestor that is
+   not single (a keyed or each child, or the root), so a single child (a wrapper) is transparent to
+   keys. The rules' order is the order of their aggregations among a node's children. `parse_rules`
+   reads them from text, one per line (`ITEMS ITEM key=NAME merge`), with the set's settings on
+   lines that start with `!`, which no element name can (`!fold`, `!ignore ID`); a key part `.` is
+   the child's own text (`key=.,@kind`), which no element name can spell either. `format_rules`
+   writes a rule set back as that text. Read back, it is the same set, but for spellings that
+   compile alike, each written as one: the parent '' as `*`, no child names or [''] as `*` (read
+   back as [`*`]), and the key part '' as `.`. A key function cannot be written and is refused; the
+   classifier is not written, and is given to the set read back. A schema's annotations can be read
+   into rules, by the caller that knows what they mean.
 
    *Not expressed: items with no element of their own*, such as a wrapper holding, per item, a
    run of elements of a group (`<NAME/><VALUE/><NAME/><VALUE/>`, an item starting at each
