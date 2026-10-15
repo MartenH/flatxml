@@ -8,14 +8,29 @@ flatxml is generic: it knows nothing about any XML vocabulary.
 ```v
 import flatxml
 
+// One file, read through handles. A missing node is an empty handle, so lookups chain, and a
+// typed read takes a default.
 mut doc := flatxml.parse_file('model.xml')!
-for c in doc.children(doc.root()) {
-	println('${doc.name(c)} ${doc.text(c)} at ${doc.pos(c)}')
+for item in doc.root_node().child('items').children_named('item') {
+	println('${item.attr('id')}: ${item.child('price').f64(0)} at ${item.pos()}')
 }
 // Namespaces are resolved only when asked for; a document read without them costs nothing extra.
 doc.resolve_namespaces()!
 println('{${doc.ns_uri(doc.ns_of(doc.root()))}}${doc.local_name(doc.root())}')
+
+// Many files as one set: read in parallel, sharing one name table, so a name has one id in all.
+mut set := flatxml.DocSet.new()
+for e in set.load(['a.xml', 'b.xml'], namespaces: true) {
+	eprintln(e.msg) // names the file, and the line where there is one
+}
+items := set.tab.path('items/item') // compiled once, for every document of the set
+for d in set.docs {
+	println('${d.path}: ${d.root_node().find_all(items).len} items')
+}
 ```
+
+The library is the `flatxml/` folder (`flatxml`, and `flatxml.xsd` below it); a project vendors
+that folder at a stated commit.
 
 ## Design
 
@@ -39,6 +54,18 @@ is text keeps that text on the element. Text nodes exist only for mixed content.
 
 **Parsing** is one forward pass. `memchr` jumps to the next `<`, names are interned through a
 small hash table keyed on the source bytes, and the `parent` array is the stack of open elements.
+
+**Names** are interned in a table (`Names`) the document points to. The documents of a set
+(`DocSet`) share one: files are parsed on up to 16 threads, each into a table of its own, then
+joined to the set's in the order given, its ids rewritten in one pass over its arrays. So across
+any number of files a name is one integer, and the result does not depend on which thread
+finished first. 560 real-world files, 169 MB, load in about 80 ms on 16 threads (230 ms on one),
+with 491 distinct names among them.
+
+**Handles** (`Node`) are a document and an index. A missing node is an empty handle: a lookup on
+it gives another, a read gives `''` or the default asked for. Children and descendants iterate
+without allocating (descendants are a scan of the `tag` array), and a path (`a/b`) compiles once
+to name ids.
 
 **Namespaces** are resolved on request, by `resolve_namespaces`, in a second linear pass: one
 more array beside the nodes (each element's namespace id) and one beside the attributes. Names
@@ -279,7 +306,8 @@ Linux too):
 ```sh
 export V_MACOS_V3_NO_FALLBACK=1
 v test .                                       # unit tests
-mkdir -p bin && v -o bin/flatxml cmd/cli       # flatxml dump | stats
+scripts/check_readme_examples.sh               # the README's examples type-check
+mkdir -p bin && v -o bin/flatxml cmd/cli       # flatxml dump | stats | set | schema | validate
 v -prod -o bin/genxml cmd/genxml               # genxml <out.xml> <megabytes>
 tools/check_vs_expat.py bin/flatxml testdata   # identical to expat, element for element
 tools/check_vs_expat.py --ns bin/flatxml testdata            # ... with namespaces resolved

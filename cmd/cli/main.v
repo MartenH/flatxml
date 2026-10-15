@@ -5,6 +5,9 @@
 //   flatxml stats [--parse-only] <file>...   parse each file and print its size, node counts and
 //                                  parse time, and (unless --parse-only) the time namespace
 //                                  resolution adds
+//   flatxml set [--ns] [--jobs N] [--ext EXT] <file|dir>...   read many files as one set (a
+//                                  directory: every file below it ending in EXT, default .xml)
+//                                  and print what they hold and how long it took
 //   flatxml schema <xsd>...        compile an XML Schema and print what it holds
 //   flatxml schema --batch [--times]   compile one schema per stdin line (tab-separated
 //                                  documents), answering `ok` or `error<TAB>message` per line;
@@ -28,6 +31,7 @@ const usage = 'usage:
   flatxml dump [--ns] <file>    canonical element/text stream, for tools/check_vs_expat.py;
                                 --ns names elements and attributes {uri}local
   flatxml stats [--parse-only] <file>...   size, node counts, parse and namespace times
+  flatxml set [--ns] [--jobs N] [--ext EXT] <file|dir>...   many files as one set, timed
   flatxml schema <xsd>...       compile an XML Schema (and what it imports), print what it holds
   flatxml schema --batch        one schema per stdin line (documents tab-separated): ok | error<TAB>why
   flatxml validate <xsd> <doc>...  check documents against a schema
@@ -78,6 +82,9 @@ fn main() {
 				exit(2)
 			}
 			match_batch()
+		}
+		'set' {
+			load_set(args[1..])
 		}
 		'stats' {
 			parse_only := args[1] == '--parse-only'
@@ -297,7 +304,7 @@ fn print_stats(path string, parse_only bool) ! {
 	texts := d.text_node_count()
 	println('${path}')
 	println('  ${mb(d.src_len)}, parsed in ${ms(took)} ${rate(d.src_len, took)}')
-	println('  ${d.len() - 1 - texts} elements, ${texts} text nodes, ${d.attr_tag.len} attributes, ${d.names.len - 2} distinct names')
+	println('  ${d.len() - 1 - texts} elements, ${texts} text nodes, ${d.attr_tag.len} attributes, ${d.tab.len() - 2} distinct names')
 	println('  node arrays ${mb(used)} used, ${mb(reserved)} reserved')
 	if parse_only {
 		d.free()
@@ -306,7 +313,7 @@ fn print_stats(path string, parse_only bool) ! {
 	ns_sw := time.new_stopwatch()
 	if _ := d.resolve_namespaces() {
 		ns_took := ns_sw.elapsed()
-		println('  namespaces resolved in ${ms(ns_took)} (${f64(ns_took) * 100 / f64(took):.1f}% of the parse), ${d.ns_uris.len - 3} declared')
+		println('  namespaces resolved in ${ms(ns_took)} (${f64(ns_took) * 100 / f64(took):.1f}% of the parse), ${d.tab.uri_count() - 3} declared')
 	} else {
 		println('  namespaces: ${err}')
 	}
@@ -423,4 +430,63 @@ fn rate(b i64, d time.Duration) string {
 		return ''
 	}
 	return '(${f64(b) / (1024 * 1024) / s:.1f} MB/s)'
+}
+
+// load_set reads files and directories as one document set and prints what it holds.
+fn load_set(args []string) {
+	mut ns := false
+	mut jobs := 0
+	mut ext := '.xml'
+	mut paths := []string{}
+	mut k := 0
+	for k < args.len {
+		match args[k] {
+			'--ns' {
+				ns = true
+			}
+			'--jobs' {
+				k++
+				jobs = if k < args.len { args[k].int() } else { 0 }
+			}
+			'--ext' {
+				k++
+				ext = if k < args.len { args[k] } else { ext }
+			}
+			else {
+				paths << args[k]
+			}
+		}
+		k++
+	}
+	sw := time.new_stopwatch()
+	mut files := []string{}
+	for p in paths {
+		if os.is_dir(p) {
+			mut found := os.walk_ext(p, ext)
+			found.sort()
+			files << found
+		} else {
+			files << p
+		}
+	}
+	listed := sw.elapsed()
+	mut s := flatxml.DocSet.new()
+	errs := s.load(files, jobs: jobs, namespaces: ns)
+	took := sw.elapsed() - listed
+	mut bytes := i64(0)
+	mut nodes := 0
+	mut attrs := 0
+	for d in s.docs {
+		bytes += d.src_len
+		nodes += d.len() - 1
+		attrs += d.attr_tag.len
+	}
+	println('${s.docs.len} files, ${mb(bytes)}, listed in ${ms(listed)}, read in ${ms(took)} ${rate(bytes, took)}')
+	println('  ${nodes} nodes, ${attrs} attributes, ${s.tab.len() - 2} distinct names')
+	for e in errs {
+		println('  failed: ${one_line(e.msg)}')
+	}
+	if errs.len > 0 {
+		exit(1)
+	}
 }

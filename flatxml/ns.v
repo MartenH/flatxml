@@ -20,34 +20,34 @@ const not_qname = u32(0xFFFF_FFFF)
 // not a qualified name (`a:b:c`, `:a`, `a:`), a misuse of the reserved prefixes or namespaces,
 // undeclaring a prefix, and two attributes of one element with the same expanded name.
 // A namespace declaration (`xmlns`, `xmlns:p`) is itself in the xmlns namespace. On an error,
-// the document is left as it was before the call (apart from names interned for the split).
+// the document is left as it was before the call (apart from names added to the table). The
+// table is changed, so the documents of one set resolve one at a time.
 pub fn (mut d Doc) resolve_namespaces() ! {
 	if d.ns.len == d.tag.len {
 		return
 	}
+	known := d.tab.uris.len
 	d.resolve() or {
-		d.ns_uris = []
-		d.ns_ids = map[string]u32{}
+		// the URIs this call added name nothing
+		mut t := d.tab
+		for t.uris.len > known {
+			t.uri_ids.delete(t.uris.pop())
+		}
 		return err
 	}
 }
 
 @[direct_array_access]
 fn (mut d Doc) resolve() ! {
-	d.split_names()
-	xml_id := d.intern_str('xml')
-	xmlns_id := d.intern_str('xmlns')
-	d.ns_uris = ['', xml_ns_uri, xmlns_ns_uri]
-	d.ns_ids = {
-		'':           no_ns
-		xml_ns_uri:   xml_ns
-		xmlns_ns_uri: xmlns_ns
-	}
+	mut t := d.tab
+	xml_id := t.intern_str('xml')
+	xmlns_id := t.intern_str('xmlns')
+	t.split()
 	mut ns := []u32{len: d.tag.len}
 	mut attr_ns := []u32{len: d.attr_tag.len}
 	// bind[p] is the namespace prefix name p is bound to; slot 0 is the default namespace.
 	// 0 means unbound for a prefix and no namespace for the default.
-	mut bind := []u32{len: d.names.len}
+	mut bind := []u32{len: t.names.len}
 	bind[xml_id] = xml_ns
 	// The declaring elements still open (their `end`), and for each the undo log of the
 	// bindings it changed, so a binding ends with the element that made it.
@@ -76,21 +76,21 @@ fn (mut d Doc) resolve() ! {
 		// attributes. Note whether any other attribute has a prefix to resolve after them.
 		for a := lo; a < hi; a++ {
 			an := d.attr_tag[a]
-			ap := d.name_prefix[an]
+			ap := t.prefix[an]
 			slot := if ap == 0 {
 				if an != xmlns_id {
 					continue
 				}
 				u32(0)
 			} else if ap == xmlns_id {
-				d.name_local[an]
+				d.tab.local[an]
 			} else {
 				prefixed = true
 				continue
 			}
 			attr_ns[a] = xmlns_ns
 			uri := d.attr_value(a)
-			id := d.ns_intern(uri)
+			id := t.uri_id(uri)
 			if slot == xmlns_id {
 				return d.err_at(int(d.src_off[i]), 'the prefix xmlns must not be declared')
 			}
@@ -101,7 +101,7 @@ fn (mut d Doc) resolve() ! {
 				return d.err_at(int(d.src_off[i]), '${uri} is reserved and must not be bound to ${d.decl_target(slot)}')
 			}
 			if slot != 0 && id == no_ns {
-				return d.err_at(int(d.src_off[i]), 'the prefix ${d.names[slot]} must not be undeclared')
+				return d.err_at(int(d.src_off[i]), 'the prefix ${d.tab.names[slot]} must not be undeclared')
 			}
 			if !declared {
 				open_end << d.end[i]
@@ -112,13 +112,13 @@ fn (mut d Doc) resolve() ! {
 			undo_old << bind[slot]
 			bind[slot] = id
 		}
-		p := d.name_prefix[tag]
+		p := t.prefix[tag]
 		if p == not_qname {
-			return d.err_at(int(d.src_off[i]), '<${d.names[tag]}> is not a qualified name')
+			return d.err_at(int(d.src_off[i]), '<${d.tab.names[tag]}> is not a qualified name')
 		}
 		ns[i] = bind[p]
 		if p != 0 && ns[i] == 0 {
-			return d.err_at(int(d.src_off[i]), 'the prefix of <${d.names[tag]}> is not bound to a namespace')
+			return d.err_at(int(d.src_off[i]), 'the prefix of <${d.tab.names[tag]}> is not bound to a namespace')
 		}
 		if !prefixed {
 			continue
@@ -126,16 +126,16 @@ fn (mut d Doc) resolve() ! {
 		// The prefixed attributes; unprefixed ones are in no namespace.
 		for a := lo; a < hi; a++ {
 			an := d.attr_tag[a]
-			ap := d.name_prefix[an]
+			ap := t.prefix[an]
 			if ap == 0 || ap == xmlns_id {
 				continue
 			}
 			if ap == not_qname {
-				return d.err_at(int(d.src_off[i]), 'attribute ${d.names[an]} is not a qualified name')
+				return d.err_at(int(d.src_off[i]), 'attribute ${d.tab.names[an]} is not a qualified name')
 			}
 			attr_ns[a] = bind[ap]
 			if attr_ns[a] == 0 {
-				return d.err_at(int(d.src_off[i]), 'the prefix of attribute ${d.names[an]} is not bound to a namespace')
+				return d.err_at(int(d.src_off[i]), 'the prefix of attribute ${d.tab.names[an]} is not bound to a namespace')
 			}
 		}
 		d.check_expanded_attrs(i, lo, hi, attr_ns)!
@@ -153,78 +153,24 @@ fn (d &Doc) check_expanded_attrs(i u32, lo u32, hi u32, attr_ns []u32) ! {
 		}
 		for b := lo; b < hi; b++ {
 			if b != a && attr_ns[b] == attr_ns[a]
-				&& d.name_local[d.attr_tag[b]] == d.name_local[d.attr_tag[a]] {
-				return d.err_at(int(d.src_off[i]), 'attributes ${d.names[d.attr_tag[a]]} and ${d.names[d.attr_tag[b]]} have the same expanded name')
+				&& d.tab.local[d.attr_tag[b]] == d.tab.local[d.attr_tag[a]] {
+				return d.err_at(int(d.src_off[i]), 'attributes ${d.tab.names[d.attr_tag[a]]} and ${d.tab.names[d.attr_tag[b]]} have the same expanded name')
 			}
 		}
 	}
 }
 
 fn (d &Doc) decl_target(slot u32) string {
-	return if slot == 0 { 'the default namespace' } else { 'the prefix ${d.names[slot]}' }
-}
-
-// split_names records, for every interned name, its prefix (`not_qname` when it is not a
-// qualified name) and local name ids. Prefixes and local names are interned too.
-fn (mut d Doc) split_names() {
-	n := d.names.len
-	mut prefix := []u32{len: n}
-	mut local := []u32{len: n}
-	// Split each name at its colon; a name with none is its own local name.
-	for id in 0 .. n {
-		name := d.names[id]
-		c := name.index_u8(`:`)
-		if c < 0 {
-			local[id] = u32(id)
-			continue
-		}
-		if c == 0 || c == name.len - 1 || name.last_index_u8(`:`) != c {
-			prefix[id] = not_qname
-			local[id] = u32(id)
-			continue
-		}
-		prefix[id] = d.intern(name.str, c)
-		local[id] = d.intern(unsafe { name.str + c + 1 }, name.len - c - 1)
-	}
-	// The prefixes and local names interned above have no colon: each is its own local name.
-	for id in n .. d.names.len {
-		prefix << 0
-		local << u32(id)
-	}
-	d.name_prefix = prefix
-	d.name_local = local
-}
-
-fn (mut d Doc) intern_str(s string) u32 {
-	id := d.intern(s.str, s.len)
-	// a name interned after split_names: no colon, its own local name
-	for d.name_prefix.len < d.names.len {
-		d.name_prefix << 0
-		d.name_local << u32(d.name_prefix.len - 1)
-	}
-	return id
-}
-
-fn (mut d Doc) ns_intern(uri string) u32 {
-	if id := d.ns_ids[uri] {
-		return id
-	}
-	id := u32(d.ns_uris.len)
-	// a copy: the value may be a view of the source, which free() releases
-	owned := uri.clone()
-	d.ns_uris << owned
-	d.ns_ids[owned] = id
-	return id
+	return if slot == 0 { 'the default namespace' } else { 'the prefix ${d.tab.names[slot]}' }
 }
 
 // --- reading resolved names ------------------------------------------------------------------
 // Before `resolve_namespaces` has run, ns_of and attr_ns_of answer no_ns and ns_uri knows the
 // reserved ids; the local-name readers need it to have run, and say so.
 
-const reserved_ns_uris = ['', xml_ns_uri, xmlns_ns_uri]
 
 fn (d &Doc) need_split() {
-	if d.name_local.len == 0 {
+	if d.ns.len != d.tag.len {
 		panic('flatxml: local names need resolve_namespaces() to have run')
 	}
 }
@@ -239,13 +185,13 @@ pub fn (d &Doc) ns_of(i u32) u32 {
 @[inline]
 pub fn (d &Doc) local_id(i u32) u32 {
 	d.need_split()
-	return d.name_local[d.tag[i]]
+	return d.tab.local[d.tag[i]]
 }
 
 // local_name is element i's name without its prefix.
 pub fn (d &Doc) local_name(i u32) string {
 	d.need_split()
-	return d.names[d.name_local[d.tag[i]]]
+	return d.tab.names[d.tab.local[d.tag[i]]]
 }
 
 // attr_ns_of is the namespace id of attribute a.
@@ -258,13 +204,13 @@ pub fn (d &Doc) attr_ns_of(a u32) u32 {
 @[inline]
 pub fn (d &Doc) attr_local_id(a u32) u32 {
 	d.need_split()
-	return d.name_local[d.attr_tag[a]]
+	return d.tab.local[d.attr_tag[a]]
 }
 
 // attr_local_name is attribute a's name without its prefix.
 pub fn (d &Doc) attr_local_name(a u32) string {
 	d.need_split()
-	return d.names[d.name_local[d.attr_tag[a]]]
+	return d.tab.names[d.tab.local[d.attr_tag[a]]]
 }
 
 // is_ns_decl reports whether attribute a declares a namespace (`xmlns` or `xmlns:p`).
@@ -275,12 +221,13 @@ pub fn (d &Doc) is_ns_decl(a u32) bool {
 
 // ns_uri is the URI of namespace id; '' for no namespace.
 pub fn (d &Doc) ns_uri(id u32) string {
-	return if int(id) < d.ns_uris.len { d.ns_uris[id] } else { reserved_ns_uris[id] }
+	return d.tab.uris[id]
 }
 
-// ns_id is the id of a namespace URI, if the document declares it (or it is reserved).
+// ns_id is the id of a namespace URI, if the document declares it (or it is reserved). In a set,
+// ids are the set's, so the URI may be declared by another document.
 pub fn (d &Doc) ns_id(uri string) ?u32 {
-	return d.ns_ids[uri] or { return none }
+	return d.tab.uri_ids[uri] or { return none }
 }
 
 // ns_for_prefix is the namespace a prefix is bound to at element i, by the declarations on i and
@@ -299,10 +246,10 @@ pub fn (d &Doc) ns_for_prefix(i u32, prefix string) ?u32 {
 			if d.attr_ns_of(a) != xmlns_ns {
 				continue
 			}
-			name := d.names[d.attr_tag[a]]
+			name := d.tab.names[d.attr_tag[a]]
 			declared := if name == 'xmlns' { '' } else { name['xmlns:'.len..] }
 			if declared == prefix {
-				return d.ns_ids[d.attr_value(a)] or { no_ns }
+				return d.tab.uri_ids[d.attr_value(a)] or { no_ns }
 			}
 		}
 		e = d.parent[e]

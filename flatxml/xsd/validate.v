@@ -179,12 +179,14 @@ fn (mut vr Validator) check_idrefs() {
 // map_names translates the document's namespace and name ids to the schema's once, so each
 // element costs two array reads to look up.
 fn (mut vr Validator) map_names() {
-	vr.ns_map = []u32{len: vr.d.ns_uris.len, init: no_match}
-	for i, uri in vr.d.ns_uris {
+	vr.ns_map = []u32{len: vr.d.tab.uri_count(), init: no_match}
+	for i in 0 .. vr.d.tab.uri_count() {
+		uri := vr.d.tab.uri(u32(i))
 		vr.ns_map[i] = vr.s.uri_ids[uri] or { no_match }
 	}
-	vr.name_map = []u32{len: vr.d.names.len, init: no_match}
-	for i, name in vr.d.names {
+	vr.name_map = []u32{len: vr.d.tab.len(), init: no_match}
+	for i in 0 .. vr.d.tab.len() {
+		name := vr.d.tab.name(u32(i))
 		vr.name_map[i] = vr.s.name_ids[name] or { no_match }
 	}
 }

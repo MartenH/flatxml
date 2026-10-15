@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Write xsd/unicode.v: the Unicode general category of every code point, as runs.
+"""Write flatxml/xsd/unicode.v: the Unicode general category of every code point, as runs.
 
-    python3 tools/gen_unicode.py > xsd/unicode.v
+    python3 tools/gen_unicode.py > flatxml/xsd/unicode.v
 
 The table is the start of each run of code points sharing a category, and the category of the
 run, from the Unicode Character Database of the Python that runs this (unicodedata). The pattern

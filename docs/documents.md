@@ -32,24 +32,36 @@ annotations are kept for that), but none is needed.
 2. **Handles and navigation.** A missing node is a valid empty handle, so a chain of lookups needs
    no check at every step; typed reads take a default. Children and descendants are iterated
    without allocating. Paths (`find('a/b')`, `iter('item')`) compile once into name ids.
-3. **Keys.** `Keys` maps an element name to what identifies one: an attribute, the text of a
-   named child, or its position among siblings of its name. An element's identity is the path of
-   keys from the root, the same in every file that holds it.
+3. **Rules.** The caller says, per parent element and child name, how such children are told
+   apart and put together:
+   - the **key**: the texts at one or more paths below the child (`NAME`, `ITEM/ID`), or an
+     attribute, compared as written or ignoring case; or none, so each child is its own;
+   - whether children of one key from different files **merge** into one, or are an error;
+   - whether their **order** means something, so that they must all come from one file;
+   - the most there may be.
+
+   Paths compile once to name ids. An element's identity is the path of keys from the root, the
+   same in every file that holds it. A schema's annotations can be read into rules, by the caller
+   that knows what they mean.
 4. **Diff.** Two documents (or two sets) are compared top down: children with keys matched by
    key, the rest aligned in order (longest common subsequence over their names and contents). A
    hash per subtree, computed once, skips identical subtrees whole. The result is an edit set:
    added, removed, moved, text and attributes changed, each with both positions.
-5. **Merged view.** Over a set and its keys: a merged node is the list of nodes, from any files,
-   with one identity; its children are their children grouped by key, in the order first met.
-   Nothing is copied. Two contributions that disagree (a different text, a different attribute
-   value, an element that may occur once appearing twice) are conflicts, reported with every
-   position, and decided by the caller's rule (first wins, last wins, or an error).
+5. **Merged view.** Over a set and its rules: a merged node is the list of nodes, from any files,
+   with one identity; its children are their children grouped by the rules, ordered by key (or as
+   written, where order means something). Nothing is copied. What the rules forbid (one key from
+   two files where it may not merge, an ordered list in two files, more than the most, two
+   contributions whose texts or attributes differ) is a problem reported with every position,
+   and decided by the caller (first wins, or an error).
 6. **Edits.** An edit set over a document or a merged view: set text, set or remove an attribute,
    insert an element (written as a fragment, or copied from any node), remove one, move one. Kept
    as changes keyed by node, so the tree's arrays are never rewritten, and read through: an
-   edited view answers like a document. A three-way merge is two diffs from a common base,
+   edited view answers like a document. An edit on a merged view lands in the files it came
+   from: a value held in several files changes in each, and a new element goes to the file the
+   caller names, so a model kept in many files stays in many files. A three-way merge is two diffs from a common base,
    applied together where they change different nodes and reported where they change the same.
-7. **Writing.** A document, an edited document or a merged view is written as XML: unchanged
+7. **Writing.** A document, an edited document (each changed file of a set, back to its own
+   path) or a merged view (as one document) is written as XML: unchanged
    subtrees as their original bytes, changed ones serialised with the escaping their place needs
    (text, attribute, CDATA), and the namespace declarations a moved or inserted node needs
    carried with it.
@@ -70,16 +82,21 @@ Round trips, which need no oracle:
 
 ## Steps
 
-1. **Document sets, handles and navigation** (design 1, 2). The README's examples compile in CI;
-   the benchmark shows the handles cost nothing. The module no longer needs its checkout to be
-   named `flatxml`.
+1. **Document sets, handles and navigation** (design 1, 2, done). `DocSet` parses in parallel and
+   joins each document to one table in the order given: 560 real-world files (169 MB) load in
+   about 80 ms on 16 threads, 230 ms on one. Handles cost what raw index loops cost: on the
+   500 MB benchmark, visiting the children of every element (12.6M) takes 34–37 ms either way,
+   and every element of one name 8–10 ms. The README's examples type-check in CI
+   (`scripts/check_readme_examples.sh`). The library moved into `flatxml/`, so the checkout no
+   longer has to be named `flatxml`.
 2. **Writing** (design 7, unedited): the byte-for-byte round trip, which every later step relies
    on.
-3. **Keys and diff** (design 3, 4), and `flatxml diff`: two files or two directories, the changes
+3. **Rules and diff** (design 3, 4), and `flatxml diff`: two files or two directories, the changes
    with their positions.
 4. **Edits** (design 6), the write of an edited document, and `flatxml apply`: a diff applied to
    its old document gives the new one.
-5. **Merged view** (design 5) and `flatxml merge`: many files into one, conflicts listed.
+5. **Merged view** (design 5) and `flatxml merge`: many files into one, problems listed; edits
+   on a merged view, written back to their own files.
 6. **Three-way merge**: two changed versions of one base.
 
 ## Techniques taken from other tools
