@@ -1,5 +1,6 @@
 module xsd
 
+import flatxml
 import os
 
 const tns = 'urn:test'
@@ -292,4 +293,145 @@ fn test_file_paths_outlive_the_documents() {
 	other := write_schema('abs.xsd', '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:abs"/>')
 	s := load(write_schema('imp.xsd', head + '<xs:import namespace="urn:abs" schemaLocation="${other}"/></xs:schema>'))!
 	assert s.files[1] == other
+}
+
+// --- the typing pass ---------------------------------------------------------------------
+
+const vschema = '
+  <xs:element name="order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id" type="xs:string"/>
+        <xs:element name="line" type="t:Line" maxOccurs="unbounded"/>
+        <xs:element name="note" type="t:Note" minOccurs="0"/>
+        <xs:element name="plain" form="unqualified" type="xs:string" minOccurs="0"/>
+        <xs:element name="abstract" type="t:Abstract" minOccurs="0"/>
+      </xs:sequence>
+      <xs:attribute name="state" type="xs:string" use="required"/>
+      <xs:attribute name="extra" type="xs:string"/>
+    </xs:complexType>
+  </xs:element>
+  <xs:complexType name="Line">
+    <xs:sequence><xs:element name="qty" type="xs:unsignedInt"/></xs:sequence>
+    <xs:attribute name="sku" type="xs:string" use="required"/>
+  </xs:complexType>
+  <xs:complexType name="Note" mixed="true">
+    <xs:sequence><xs:element name="b" type="xs:string" minOccurs="0"/></xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="Abstract" abstract="true"/>
+'
+
+fn check(doc string) !Validation {
+	s := compile(vschema)!
+	mut d := flatxml.parse_string(doc)!
+	return validate(mut d, s)
+}
+
+fn kinds(v Validation) []FindingKind {
+	return v.findings.map(it.kind)
+}
+
+const ok_doc = '<order xmlns="urn:test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:test o.xsd" state="new">
+  <id>A1</id>
+  <line sku="x"><qty>2</qty></line>
+  <line sku="y"><qty>3</qty></line>
+  <note>some <b>bold</b> text</note>
+  <plain xmlns="">p</plain>
+</order>'
+
+fn test_a_valid_document() {
+	v := check(ok_doc)!
+	assert v.valid(), v.findings.str()
+	// every element has its declaration
+	s := compile(vschema)!
+	mut d := flatxml.parse_string(ok_doc)!
+	w := validate(mut d, s)!
+	assert w.declared(d.root())? == s.element(tns, 'order')?
+	line := d.next_sibling(d.first_child(d.root()))
+	assert s.names[s.elements[w.declared(line)?].name.local] == 'line'
+}
+
+fn test_undeclared_elements_are_reported_once_per_subtree() {
+	v := check('<order xmlns="urn:test" state="s"><id>1</id><bogus><deep><deeper/></deep></bogus></order>')!
+	assert kinds(v) == [.undeclared_element]
+	assert v.findings[0].msg == '<bogus> is not allowed in <order>'
+	r := check('<other xmlns="urn:test"/>')!
+	assert r.findings[0].msg == '<other> is not declared as a root element'
+	// the right name in the wrong namespace is another name
+	n := check('<order xmlns="urn:test" state="s"><id xmlns="urn:else">1</id></order>')!
+	assert kinds(n) == [.undeclared_element]
+}
+
+fn test_attributes() {
+	v := check('<order xmlns="urn:test" bogus="1" extra="ok"><line/></order>')!
+	assert kinds(v) == [.undeclared_attribute, .missing_attribute, .missing_attribute]
+	assert v.findings[0].msg == 'attribute bogus is not allowed on <order>'
+	assert v.findings[1].msg == '<order> needs attribute state'
+	assert v.findings[2].msg == '<line> needs attribute sku'
+	// an attribute on an element of simple type
+	s := check('<order xmlns="urn:test" state="s"><id lang="en">1</id></order>')!
+	assert kinds(s) == [.undeclared_attribute]
+}
+
+fn test_content_kinds() {
+	// text in element-only content, child elements in simple content
+	v := check('<order xmlns="urn:test" state="s">stray<id>1<x/></id></order>')!
+	assert kinds(v) == [.text_not_allowed, .children_not_allowed]
+	// text-only content of an element-only type
+	w := check('<order xmlns="urn:test" state="s"><line sku="x">text</line></order>')!
+	assert kinds(w) == [.text_not_allowed]
+	// whitespace is not text here
+	x := check('<order xmlns="urn:test" state="s"><line sku="x"> <![CDATA[ ]]> </line></order>')!
+	assert x.valid(), x.findings.str()
+	a := check('<order xmlns="urn:test" state="s"><abstract/></order>')!
+	assert kinds(a) == [.abstract_type]
+}
+
+fn test_xsi_type_is_not_supported() {
+	v := check('<order xmlns="urn:test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" state="s"><id xsi:type="xs:string">1</id></order>')!
+	assert kinds(v) == [.unsupported]
+}
+
+fn test_findings_are_capped_but_counted() {
+	mut body := ''
+	for _ in 0 .. 20 {
+		body += '<bogus/>'
+	}
+	s := compile(vschema)!
+	mut d := flatxml.parse_string('<order xmlns="urn:test" state="s">${body}</order>')!
+	v := validate(mut d, s, max_findings: 5)!
+	assert v.findings.len == 5 && v.total == 20
+}
+
+fn test_not_namespace_well_formed_is_an_error() {
+	check('<p:order/>') or {
+		assert err.msg().contains('not bound')
+		return
+	}
+	assert false
+}
+
+fn test_a_schema_the_document_names_elsewhere_is_unsupported() {
+	v := check('<o:order xmlns:o="urn:other" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:other other.xsd"/>')!
+	assert kinds(v) == [.unsupported]
+	assert v.findings[0].msg.contains('named in the document (xsi:schemaLocation), which is not followed')
+	// xsi:type anywhere: the subtree is not assessed
+	w := check('<order xmlns="urn:test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="t:X"><bogus/></order>')!
+	assert kinds(w) == [.unsupported]
+}
+
+fn test_review_cases_for_validation() {
+	sch := '<xs:element name="r"><xs:complexType><xs:sequence><xs:element name="p" type="t:P" minOccurs="0"/><xs:element name="q" type="xs:string" minOccurs="0"/></xs:sequence></xs:complexType></xs:element><xs:complexType name="P"><xs:simpleContent><xs:extension base="xs:string"><xs:attribute name="u"/></xs:extension></xs:simpleContent></xs:complexType>'
+	s := compile(sch)!
+	run := fn [s] (doc string) []FindingKind {
+		mut d := flatxml.parse_string(doc) or { panic(err) }
+		return kinds(validate(mut d, s) or { panic(err) })
+	}
+	// text split by a comment or CDATA is still the text of simple content
+	assert run('<r xmlns="urn:test"><p u="a">10<!-- c -->0</p><q>x<![CDATA[y]]></q></r>') == []
+	// xsi:nil false is valid anywhere; true is an error, since nothing is nillable
+	assert run('<r xmlns="urn:test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><q xsi:nil="false">x</q></r>') == []
+	assert run('<r xmlns="urn:test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><q xsi:nil="true"/></r>') == [.not_nillable]
+	// a document in no namespace that names its own schema
+	assert run('<other xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="o.xsd"/>') == [.unsupported]
 }

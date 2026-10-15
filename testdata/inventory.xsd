@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The schema of the documents cmd/genxml writes. -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:i="urn:example:inventory"
+    targetNamespace="urn:example:inventory" elementFormDefault="qualified">
+  <xs:element name="inventory">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="site" type="i:Site" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="xs:unsignedInt" use="required"/>
+    </xs:complexType>
+  </xs:element>
+  <xs:complexType name="Site">
+    <xs:sequence>
+      <xs:element name="device" type="i:Device" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="id" type="xs:NMTOKEN" use="required"/>
+  </xs:complexType>
+  <xs:complexType name="Device">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+      <xs:element name="serial" type="i:Serial"/>
+      <xs:element name="enabled" type="xs:boolean"/>
+      <xs:element name="settings" type="i:Settings"/>
+      <xs:element name="link" type="i:Link" minOccurs="0"/>
+      <xs:element name="note" type="i:Note" minOccurs="0"/>
+      <xs:element name="raw" type="xs:string" minOccurs="0"/>
+    </xs:sequence>
+    <xs:attribute name="id" type="xs:NMTOKEN" use="required"/>
+    <xs:attribute name="kind" type="i:Kind" use="required"/>
+  </xs:complexType>
+  <xs:complexType name="Settings">
+    <xs:sequence>
+      <xs:element name="setting" type="i:Setting" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="Setting">
+    <xs:simpleContent>
+      <xs:extension base="xs:unsignedInt">
+        <xs:attribute name="key" type="xs:NMTOKEN" use="required"/>
+        <xs:attribute name="unit" type="i:Unit" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="Link">
+    <xs:attribute name="ref" type="xs:NMTOKEN" use="required"/>
+  </xs:complexType>
+  <xs:complexType name="Note" mixed="true">
+    <xs:sequence>
+      <xs:element name="em" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:simpleType name="Serial">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="SN-[0-9]{7}"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="Kind">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="sensor"/>
+      <xs:enumeration value="actuator"/>
+      <xs:enumeration value="gateway"/>
+      <xs:enumeration value="controller"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="Unit">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="ms"/>
+      <xs:enumeration value="mV"/>
+      <xs:enumeration value="rpm"/>
+      <xs:enumeration value="percent"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>

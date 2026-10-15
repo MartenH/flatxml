@@ -54,15 +54,27 @@ they import, resolves every reference, expands groups and attribute groups, and 
 that extends another its base's content and attributes. It supports the subset of XSD 1.0 in
 the plan and refuses everything else by name and position (`xsd:all at s.xsd:12:5: ... not
 supported`), because a validator that skips a constraint calls invalid documents valid. Each
-`xsd:appinfo` is kept as text for the consumer. Validating documents against a schema is the
-next step of the plan.
+`xsd:appinfo` is kept for the consumer, its content written back as XML.
+
+`xsd.validate(mut doc, schema)` checks a document against a compiled schema. It gives each
+element the declaration its context names (one more array beside the nodes) and reports what the
+schema does not allow, with positions: an element not declared where it is, an undeclared or
+missing attribute, text in element-only content, children in simple content, an abstract type,
+`xsi:nil="true"` (no declaration can be nillable here). `xsi:type`, and a schema the document
+names itself (`xsi:schemaLocation`, `xsi:noNamespaceSchemaLocation`), are reported as not
+supported rather than guessed at. Values, and the order and number of children, are the next
+steps of the plan.
 
 ```v
+import flatxml
 import flatxml.xsd
 
 s := xsd.load('model.xsd')!
-root := s.element('urn:example', 'model')?
-println(s.qname(s.elements[root].name))
+mut doc := flatxml.parse_file('model.xml')!
+v := xsd.validate(mut doc, s)!
+for f in v.findings {
+	println('${doc.pos(f.node)}: ${f.msg}')
+}
 ```
 
 ## Verified
@@ -91,7 +103,13 @@ Results marked *earlier* predate this repository; the parser has not changed sin
   schema rejected. 4,020 valid schemas compile and 307 invalid ones are rejected; 9,295 use
   constructs outside the subset and are refused; 744 invalid ones compile because the rule they
   break is not checked yet (617 of them an invalid pattern, which the pattern engine of step 4
-  will catch); one is a documented divergence (a missing type is an error at once).
+  will catch); one is a documented divergence (a missing type is an error at once). Of 6,461
+  instance tests whose schema compiles, no valid document is reported: 3,714 valid documents
+  pass, 47 invalid ones are reported, 22 use something unsupported (`xsi:type`, a schema the
+  document names itself, XML 1.1), and 2,678 invalid ones pass because their error is in a value
+  or in the order or number of children (steps 4 and 5).
+- **Validation of real-world files**: 463 of the 697 files, against the schema each declares,
+  agree with libxml2 on every verdict (461 valid; 2 invalid, reported at the same line).
 
 ## Benchmark
 
@@ -106,6 +124,8 @@ Core Ultra 9 285H under WSL2. It is dense: 12.6M elements and 12.3M attributes, 
 | lxml 5.3.1 (libxml2 2.12.9) | 12.2 s | 7.1 GB |
 
 Resolving namespaces on the same document takes about 105 ms more, roughly a tenth of the parse.
+Validating it against `testdata/inventory.xsd` (namespaces included, values and order not yet
+checked) takes about 0.34 s.
 
 ## Limitations
 
@@ -118,6 +138,7 @@ Non-validating, and lenient where that does not change how a well-formed file re
   values it declares are not applied.
 - Text is returned as the document's bytes. A document in an encoding other than UTF-8 (or
   ASCII), such as ISO-8859-1 or UTF-16, is not converted.
+- XML 1.1 is not supported. A document that declares it is read as XML 1.0, as expat reads it.
 - With namespaces resolved, the parts of a qualified name are not validated either (`p:1a` is
   accepted), and colons in processing-instruction targets and in DTD declarations, which the
   parser skips, are not checked.
@@ -141,13 +162,15 @@ tools/check_vs_expat.py --ns bin/flatxml testdata            # ... with namespac
 tools/fuzz_vs_expat.py --ns --count 4000 bin/flatxml testdata/*.xml   # random edits
 tools/bench.sh 500                             # against ElementTree and lxml
 bin/flatxml schema model.xsd                   # compile a schema, print what it holds
+bin/flatxml validate model.xsd model.xml       # check a document against it
 scripts/fetch_xsts.sh /tmp/xsts && tools/xsts.py bin/flatxml /tmp/xsts   # W3C schema tests
 ```
 
 CI (`.github/workflows/ci.yml`) builds the pinned V (`.v-version`, and its C bootstrap at
 `.vc-version`), runs the unit tests, checks `testdata/` and an 8 MB generated document against
-expat in both modes, fuzzes 500 mutations in each, and runs the W3C schema tests (fetched at the
-commit `.xsts-version` names, without the NIST datatype set).
+expat in both modes, fuzzes 500 mutations in each, validates the generated document against
+`testdata/inventory.xsd`, and runs the W3C schema and instance tests (fetched at the commit
+`.xsts-version` names, without the NIST datatype set).
 
 ## Licence
 
