@@ -61,7 +61,11 @@ jobs:
         run: bin/flatxml apply --check testdata/tricky.xml "$RUNNER_TEMP/edited.xml" "$RUNNER_TEMP/applied.xml"
 
       - name: A three-way merge takes both sides
-        run: bin/flatxml merge3 testdata/tricky.xml "$RUNNER_TEMP/edited.xml" testdata/tricky.xml "$RUNNER_TEMP/merged.xml"
+        run: |
+          printf 'attr\t/\tt\tw\n' | bin/flatxml edit testdata/tricky.xml "$RUNNER_TEMP/theirs.xml" -
+          printf 'attr\t/\tt\tw\n' | bin/flatxml edit "$RUNNER_TEMP/edited.xml" "$RUNNER_TEMP/both.xml" -
+          bin/flatxml merge3 testdata/tricky.xml "$RUNNER_TEMP/edited.xml" "$RUNNER_TEMP/theirs.xml" "$RUNNER_TEMP/merged.xml"
+          bin/flatxml diff "$RUNNER_TEMP/merged.xml" "$RUNNER_TEMP/both.xml"
 
       - name: A generated document is valid against its schema
         run: bin/flatxml validate testdata/inventory.xsd "$RUNNER_TEMP/gen_8.xml"

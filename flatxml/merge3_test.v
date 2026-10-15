@@ -132,13 +132,17 @@ fn test_a_patch_is_a_merge() {
 
 struct MG {
 mut:
-	id string
-	w  string
-	v  string
-	os []MO
+	id   string
+	w    string
+	v    string
+	os   []MO
+	file int    // the file of the base the group is in
+	y    bool   // its mixed text has a <y/> before the <x/>
+	tail string // the text after the <x/> in it
 }
 
 struct MO {
+mut:
 	id string
 	v  string
 }
@@ -148,14 +152,32 @@ fn (g &MG) xml() string {
 	if g.v != '' {
 		x += '<v>${g.v}</v>'
 	}
+	x += '<p>a' + if g.y { '<y/>' } else { '' } + '<x/>${g.tail}</p>'
 	for o in g.os {
 		x += '<o id="${o.id}"><v>${o.v}</v></o>'
 	}
 	return x + '</s>'
 }
 
+// deep is a copy of gs that shares no list with it.
+fn deep(gs []MG) []MG {
+	return gs.map(MG{
+		...it
+		os: it.os.clone()
+	})
+}
+
 fn model_xml(gs []MG) string {
-	return '<r>' + gs.map(it.xml()).join('') + '</r>'
+	return '<r>' + gs.filter(it.id != '').map(it.xml()).join('') + '</r>'
+}
+
+// model_files is the base: each group in its file of two.
+fn model_files(gs []MG) map[string]string {
+	mut out := map[string]string{}
+	for f in 0 .. 2 {
+		out['f${f}.xml'] = '<r>' + gs.filter(it.file == f).map(it.xml()).join('') + '</r>'
+	}
+	return out
 }
 
 // edit_group makes one edit to g, chosen by seed, the same every time; false to remove it.
@@ -190,18 +212,29 @@ fn edit_group(mut g MG, seed u64, side string) bool {
 	return true
 }
 
+const m3p_rules = '
+r s key=@id merge
+s v single merge
+s p single merge
+s o key=@id ordered
+o v single merge
+'
+
 fn test_random_edits_on_two_sides_merge() {
-	rules := m3_rules
+	rules := m3p_rules
 	mut r := MRng{0x2545F4914F6CDD1D}
 	mut clean, mut conflicted, mut taken := 0, 0, 0
+	mut moves, mut across, mut mixed := 0, 0, 0
 	for round in 0 .. 300 {
 		mut base := []MG{}
 		mut next := 0
-		for i in 0 .. 3 + r.n(5) {
+		for i in 0 .. 4 + r.n(5) {
 			mut g := MG{
-				id: 's${i}'
-				w:  '0'
-				v:  'v${r.n(3)}'
+				id:   's${i}'
+				w:    '0'
+				v:    'v${r.n(3)}'
+				file: r.n(2)
+				tail: 'b'
 			}
 			for _ in 0 .. r.n(5) {
 				g.os << MO{'o${next}', '${r.n(3)}'}
@@ -209,84 +242,205 @@ fn test_random_edits_on_two_sides_merge() {
 			}
 			base << g
 		}
-		// each group edited by ours, theirs, both alike, both differently, or neither
-		mut ours, mut theirs, mut want := base.clone(), base.clone(), base.clone()
-		mut overlaps := 0
+		// each group edited by ours, theirs, both alike, both differently (one text), in its mixed
+		// text by both (a <y/> on one side, the text after <x/> on the other), or neither
+		mut ours, mut theirs, mut want := deep(base), deep(base), deep(base)
+		mut expected := 0
+		mut free := []int{}
 		for k in 0 .. base.len {
 			seed := u64(round * 100 + k) * 0x9E3779B97F4A7C15
-			who := r.n(5)
-			mut gone_o, mut gone_t, mut gone_w := false, false, false
+			who := r.n(7)
 			if who == 0 || who == 2 {
-				gone_o = !edit_group(mut ours[k], seed, 'o')
-				gone_w = !edit_group(mut want[k], seed, 'o')
+				if !edit_group(mut ours[k], seed, 'o') {
+					ours[k].id = ''
+				}
+				if !edit_group(mut want[k], seed, 'o') {
+					want[k].id = ''
+				}
 			}
 			if who == 1 {
-				gone_t = !edit_group(mut theirs[k], seed, 't')
-				gone_w = !edit_group(mut want[k], seed, 't')
+				if !edit_group(mut theirs[k], seed, 't') {
+					theirs[k].id = ''
+				}
+				if !edit_group(mut want[k], seed, 't') {
+					want[k].id = ''
+				}
 			}
 			if who == 2 {
-				gone_t = !edit_group(mut theirs[k], seed, 'o')
+				if !edit_group(mut theirs[k], seed, 'o') {
+					theirs[k].id = ''
+				}
 			}
 			if who == 3 {
-				// one text, two values: a conflict, and ours's value kept
 				ours[k].v = 'ov'
 				theirs[k].v = 'tv'
 				want[k].v = 'ov'
-				overlaps++
+				expected++
 			}
-			if gone_o {
-				ours[k].id = ''
+			if who == 4 {
+				ours[k].y = true
+				theirs[k].tail = 'c'
+				want[k].y = true
+				want[k].tail = 'c'
+				mixed++
 			}
-			if gone_t {
-				theirs[k].id = ''
+			if who >= 5 {
+				free << k
 			}
-			if gone_w {
-				want[k].id = ''
+		}
+		// a child moved from one group no other edit touches to another, by one side, perhaps
+		// changed by the other; into another file where the groups are in two
+		if free.len >= 2 && free.any(base[it].os.len > 0) {
+			mut from := free.filter(base[it].os.len > 0)[r.n(free.filter(base[it].os.len > 0).len)]
+			mut to := free[r.n(free.len)]
+			if to == from {
+				to = free.filter(it != from)[0]
+			}
+			x := base[from].os.len - 1
+			o := base[from].os[x]
+			mover_ours := r.n(2) == 0
+			other_edits := r.n(2) == 0
+			cross := base[from].file != base[to].file
+			moves++
+			if cross {
+				across++
+			}
+			mut moved := o
+			mut changed := o
+			changed.v = 'e'
+			// the side that moves, and the other
+			if mover_ours {
+				ours[from].os.delete(x)
+				ours[to].os << moved
+				if other_edits {
+					theirs[from].os[x] = changed
+				}
+			} else {
+				theirs[from].os.delete(x)
+				theirs[to].os << moved
+				if other_edits {
+					ours[from].os[x] = changed
+				}
+			}
+			if cross && other_edits {
+				expected++
+				if mover_ours {
+					// ours's copy is made, theirs's change is the conflict
+					want[from].os.delete(x)
+					want[to].os << moved
+				} else {
+					// the move is not made, ours's change is kept
+					want[from].os[x] = changed
+				}
+			} else {
+				want[from].os.delete(x)
+				want[to].os << if other_edits { changed } else { moved }
 			}
 		}
 		// a new group on each side
 		if r.n(3) == 0 {
 			ours << MG{
-				id: 'no${round}'
-				v:  'x'
+				id:   'no${round}'
+				v:    'x'
+				tail: 'b'
 			}
 			want << MG{
-				id: 'no${round}'
-				v:  'x'
+				id:   'no${round}'
+				v:    'x'
+				tail: 'b'
 			}
 		}
 		if r.n(3) == 0 {
 			theirs << MG{
-				id: 'nt${round}'
-				v:  'y'
+				id:   'nt${round}'
+				v:    'y'
+				tail: 'b'
 			}
 			want << MG{
-				id: 'nt${round}'
-				v:  'y'
+				id:   'nt${round}'
+				v:    'y'
+				tail: 'b'
 			}
 		}
-		live := fn (gs []MG) []MG {
-			return gs.filter(it.id != '')
-		}
-		out, m := merged3({
-			'a.xml': model_xml(base)
-		}, {
-			'a.xml': model_xml(live(ours))
-		}, {
-			'a.xml': model_xml(live(theirs))
-		}, rules)
+		parts := model_files(base)
+		out, m := merged3(parts, one(model_xml(ours)), one(model_xml(theirs)), rules)
 		taken += m.taken
-		assert m.conflicts.len == overlaps && m.conflicts.all(it.kind == .text), 'round ${round}\n${model_xml(base)}\n${model_xml(live(ours))}\n${model_xml(live(theirs))}'
+		what := 'round ${round}\n${parts}\n${model_xml(ours)}\n${model_xml(theirs)}\n${out}'
+		assert m.conflicts.len == expected, '${what}\n${m.conflicts.map(it.kind)}'
 		got := mview(out, rules)
-		mut d := diff(got, mview({
-			'a.xml': model_xml(live(want))
-		}, rules))
-		assert d.equal(), 'round ${round}\n${model_xml(base)}\n${model_xml(live(ours))}\n${model_xml(live(theirs))}\n${out}\n${d.changes.map(d.describe(it))}'
-		if overlaps > 0 {
+		assert got.problems.len == 0, what
+		mut d := diff(got, mview(one(model_xml(want)), rules))
+		assert d.equal(), '${what}\n${d.changes.map(d.describe(it))}'
+		if expected > 0 {
 			conflicted++
 		} else {
 			clean++
 		}
 	}
-	assert clean > 100 && conflicted > 100 && taken > 250, '${clean} ${conflicted} ${taken}'
+	assert clean > 50 && conflicted > 100 && taken > 250 && across > 30 && mixed > 100, '${clean} ${conflicted} ${taken} ${moves} ${across} ${mixed}'
+}
+
+// --- the cases a review reproduced -------------------------------------------------------------
+
+fn one(xml string) map[string]string {
+	return {
+		'a.xml': xml
+	}
+}
+
+fn test_two_moves_into_each_other_are_a_conflict() {
+	out, m := merged3(one('<r><a/><b/></r>'), one('<r><b><a/></b></r>'), one('<r><a><b/></a></r>'),
+		'')
+	assert m.conflicts.map(it.kind) == [.moved]
+	assert out['a.xml'] == '<r><b><a/></b></r>'
+}
+
+const split_rules = 'r s key=@id merge\ns o key=@id merge\no v single merge'
+
+fn test_a_node_one_side_moves_to_another_file_keeps_the_other_sides_changes_or_says_so() {
+	base := {
+		'a.xml': '<r><s id="1"><o id="x"><v>1</v></o></s></r>'
+		'b.xml': '<r><s id="2"><o id="y"/></s></r>'
+	}
+	moved := one('<r><s id="1"/><s id="2"><o id="y"/><o id="x"><v>1</v></o></s></r>')
+	changed := one('<r><s id="1"><o id="x"><v>2</v></o></s><s id="2"><o id="y"/></s></r>')
+	// ours moves x into b.xml, theirs changes it: ours's copy is made, theirs's change is a conflict
+	out, m := merged3(base, moved, changed, split_rules)
+	assert m.conflicts.map(it.kind) == [.moved]
+	assert out['a.xml'] == '<r><s id="1"></s></r>'
+	// (o is ordered by key: x before y)
+	assert out['b.xml'] == '<r><s id="2"><o id="x"><v>1</v></o><o id="y"/></s></r>'
+	// theirs moves it, ours changed it: it stays, with ours's change, and that is a conflict
+	out2, m2 := merged3(base, changed, moved, split_rules)
+	assert m2.conflicts.map(it.kind) == [.moved]
+	assert out2['a.xml'] == '<r><s id="1"><o id="x"><v>2</v></o></s></r>'
+	assert out2['b.xml'] == '<r><s id="2"><o id="y"/></s></r>'
+}
+
+fn test_two_different_children_of_one_identity_added_are_a_conflict() {
+	out, m := merged3(one('<r><s id="1"/></r>'), one('<r><s id="1"><o id="n"><v>1</v></o></s></r>'),
+		one('<r><s id="1"><o id="n"><v>2</v></o></s></r>'), split_rules)
+	assert m.conflicts.map(it.kind) == [.added]
+	assert out['a.xml'] == '<r><s id="1"><o id="n"><v>1</v></o></s></r>'
+}
+
+fn test_a_text_only_moved_among_children_is_not_a_text_change() {
+	out, m := merged3(one('<r><p>a<x/>b</p></r>'), one('<r><p>a<y/><x/>b</p></r>'), one('<r><p>a<x/>c</p></r>'),
+		'')
+	assert m.clean()
+	assert out['a.xml'] == '<r><p>a<y/><x/>c</p></r>'
+}
+
+fn test_a_removal_against_a_move_into_it_names_the_move() {
+	_, m := merged3(one('<r><x/><y><z/></y></r>'), one('<r><x><z/></x><y/></r>'), one('<r><y><z/></y></r>'),
+		'')
+	assert m.conflicts.len == 1 && m.conflicts[0].kind == .removed
+	assert m.conflicts[0].ours.kind == .moved && m.conflicts[0].ours.old.name() == 'z'
+}
+
+fn test_equal_additions_are_matched_one_to_one() {
+	out, m := merged3(one('<r><s/></r>'), one('<r><s><x/></s></r>'), one('<r><s><x/><x/></s></r>'),
+		'')
+	assert m.clean()
+	assert out['a.xml'] == '<r><s><x/><x/></s></r>'
 }

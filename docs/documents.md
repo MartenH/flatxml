@@ -301,27 +301,36 @@ Round trips, which need no oracle:
    one base, documents or sets read by the same rules. Both are compared with the base, so both
    diffs name the base's nodes, and their changes are put together node by node: a change one side
    makes is taken; the same change made on both (one text, one attribute value, one removal, a
-   move under one parent, an equal subtree added under one node) is taken once; two that disagree
-   are a conflict. A conflict is a text or an attribute changed to two values, a node removed on
-   one side and changed (at or below it) on the other, or a node moved under two different
-   parents; a node removed by both, or by one inside a node the other removes, is not one. The
-   result keeps ours for every conflict and is written all the same: a conflict is listed with the
-   node's path and its place in the base, ours and theirs (`-` where a side removed it), and the
-   command exits 1, so a caller for whom a conflict is an error refuses the result; no markers are
-   written into the files, which would make them documents of no schema. The changes are applied
-   to the base, ours first (`Diff.apply`), then theirs read through ours (`Diff.apply_to`), so
-   every byte neither touched stays as the base has it, and a new element goes to the base's file
-   named like the file it comes from. A patch is the same thing: the changes from A to B made on C
-   is the merge of C (ours) and B (theirs) on A. Verified: 300 random models, each group of each
-   edited by ours, by theirs, by both alike, by both differently or by neither (texts, attributes,
-   children removed, added and reordered, groups removed, new groups on each side), merge to the
-   model with every edit, and report exactly the groups edited both ways, ours kept; each rule of
-   putting changes together breaks a test when removed. On the 560 real-world files, two copies
-   with 267 and 276 texts changed independently merge in 0.6 s (after 0.9 s reading the three)
-   into 102 files with 2 conflicts (one text changed to two values twice), the result differing
-   from ours by exactly theirs's changes and from theirs by ours's; with the rules, where changing
-   a key text splits a node, 3 conflicts on 125 files, the result again differing from each side
-   by exactly the other's changes.
+   move under one parent, an equal subtree added under one node, matched one to one) is taken
+   once; two that disagree are a conflict. A conflict is: a text changed to two different texts (a
+   text change that only moves the runs among the children, the other side's structure, is not
+   one); an attribute set to two values; a node removed on one side and changed at or below it (or
+   given a child) on the other; a node moved under two parents, or two moved into each other; a
+   node one side moves into another file where the other changed something below it; or two
+   different children of one identity (key, or single name) added under one node. A node removed
+   by both, or by one inside a node the other removes, is not one. The result keeps ours for every
+   conflict and is written all the same: a conflict is listed with the node's path and its place
+   in the base, ours and theirs (`-` where a side removed it), and the command exits 1, so a
+   caller for whom a conflict is an error refuses the result; no markers are written into the
+   files, which would make them documents of no schema. The changes are applied to the base, ours
+   first (`Diff.apply`), then theirs read through ours (`Diff.apply_to`), so every byte neither
+   touched stays as the base has it, a text theirs changes is put after the same children it
+   follows in theirs, and a new element goes to the base's file named like the file it comes from.
+   No change of either side is dropped without a conflict: theirs's changes below a node ours
+   copied into another file are conflicts, and a node theirs would copy into another file stays
+   where it is when ours changed something below it (`ApplyOptions.across`). A patch is the same
+   thing: the changes from A to B made on C is the merge of C (ours) and B (theirs) on A.
+   Verified: 300 random models in two files, each group edited by ours, by theirs, by both alike,
+   by both differently, or in its mixed text by both (an element put before a child on one side,
+   the text after it changed on the other), and a child moved from one group to another by one
+   side, into the other file in half the cases and changed or not by the other side (166 moves, 84
+   across files, 256 mixed texts), merge to the model with every edit, and report exactly the
+   conflicts the model expects; each rule of putting changes together breaks a test when removed.
+   On the 560 real-world files, two copies with 267 and 276 texts changed independently merge in
+   about 0.6 s (after 0.8 s reading the three) into 102 files with 2 conflicts (one text changed
+   to two values twice), the result differing from ours by exactly theirs's changes and from
+   theirs by ours's; with the rules, where changing a key text splits a node, 3 conflicts on 125
+   files, the result again differing from each side by exactly the other's changes.
 
 ## Techniques taken from other tools
 

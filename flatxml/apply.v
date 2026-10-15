@@ -18,6 +18,8 @@ pub:
 	view &Merged = unsafe { nil }
 mut:
 	edits map[int]&Edit // a document's number in the set -> its edit set, once edited
+	// view nodes whose subtrees a diff applied copied whole into another document
+	copied map[u32]bool
 }
 
 // edit starts an empty set of edits on the view, whose documents must outlive it.
@@ -148,6 +150,9 @@ pub:
 	// its nearest new sibling that the parent's fragments hold (of its own aggregation first;
 	// before it, else after it), else of its parent's first fragment
 	into ?IntoFn
+	// asked before a moved node is copied to another document (its original left behind); false
+	// leaves it where it was, and the move is not made
+	across ?fn (c Change) bool
 }
 
 // apply makes the changes of the diff on its old view, as edits on the old view's documents: the
@@ -183,9 +188,10 @@ pub fn (d &Diff) apply_to(mut me MEdit, opts ApplyOptions) ! {
 		return error('apply: the edits are not of the view the diff was made from')
 	}
 	mut a := Applier{
-		d:    d
-		me:   me
-		into: opts.into
+		d:      d
+		me:     me
+		into:   opts.into
+		across: opts.across
 	}
 	a.run()!
 }
@@ -201,13 +207,13 @@ pub fn apply(diff Diff, old &Doc) !&Edit {
 }
 
 struct Applier {
-	d    &Diff = unsafe { nil }
-	into ?IntoFn
+	d      &Diff = unsafe { nil }
+	into   ?IntoFn
+	across ?fn (c Change) bool
 mut:
 	me &MEdit = unsafe { nil }
-	// old nodes whose subtrees were copied whole into another document: what is below them is in
-	// the copy as the new view has it
-	copied map[u32]bool
+	// what this pass put in: (a new view node, document) -> the element there
+	made map[u64]ENode
 }
 
 // lift takes element k out of the document, wherever it is: in it, or inside an element taken
@@ -325,7 +331,7 @@ fn (mut a Applier) set_value(c Change) ! {
 		mut e := f.e
 		if c.kind == .text {
 			if only.ok() || c.old.fragment_count() == 1 || f.text_runs() == old_runs {
-				e.set_text_runs(f, c.runs)!
+				e.set_text_runs(f, a.reslot(c, f))!
 			}
 			continue
 		}
@@ -400,6 +406,43 @@ fn (a &Applier) new_attr_name(mut e Edit, f ENode, c Change) !string {
 	return '${p}:${local}'
 }
 
+// reslot is the new runs of text change c in fragment f: a run after a child is after the same
+// child where f now has it, so that edits made already (another diff's) keep their places.
+fn (mut a Applier) reslot(c Change, f ENode) []TextRun {
+	d := a.d
+	kids := f.children()
+	lo := d.new.kid_lo[c.new.i]
+	mut out := []TextRun{cap: c.runs.len}
+	for r in c.runs {
+		if r.slot == 0 {
+			out << r
+			continue
+		}
+		n := lo + u32(r.slot - 1)
+		mut key := no_key
+		if m := a.made[at_key(n, f.e.number)] {
+			key = m.key
+		} else if old := d.matched[n] {
+			o := a.me.fragment(d.old.node(old), f.e.number)
+			if o.ok() && o.parent().key == f.key {
+				key = o.key
+			}
+		}
+		mut slot := r.slot
+		for x, k in kids {
+			if k.key == key {
+				slot = x + 1
+				break
+			}
+		}
+		if out.len > 0 && slot < out.last().slot {
+			slot = out.last().slot
+		}
+		out << TextRun{slot, r.text}
+	}
+	return out
+}
+
 // value_target is the fragment of c.old a value it did not have goes to: in the document `into`
 // names for the new node's fragment that holds it, else the old node's first fragment.
 fn (mut a Applier) value_target(c Change) ENode {
@@ -435,12 +478,12 @@ fn (mut a Applier) keep_runs(p MNode, mut slots map[u64]Slot) {
 
 // inside_copy reports whether old node n is in a subtree copied whole to another document.
 fn (a &Applier) inside_copy(n MNode) bool {
-	if a.copied.len == 0 {
+	if a.me.copied.len == 0 {
 		return false
 	}
 	mut c := n
 	for c.ok() {
-		if a.copied[c.i] {
+		if a.me.copied[c.i] {
 			return true
 		}
 		c = c.parent()
@@ -587,6 +630,7 @@ fn (mut a Applier) add(c Change, mut spots map[int]Spot, default_doc int) !int {
 		mut e := sp.t.e
 		made := e.insert_copy(sp.t, sp.at, f)!
 		put_at(mut spots, k, made)
+		a.made[at_key(c.new.i, k)] = made
 		if first < 0 {
 			first = k
 		}
@@ -604,7 +648,13 @@ fn (mut a Applier) move(c Change, mut spots map[int]Spot, default_doc int) !int 
 		across = a.doc_for(c.new.fragment(0), c.parent, spots, default_doc) != frags[0].e.number
 	}
 	if across {
-		a.copied[c.old.i] = true
+		if ask := a.across {
+			if !ask(c) {
+				a.stay(frags, mut spots)
+				return frags[0].e.number
+			}
+		}
+		a.me.copied[c.old.i] = true
 		return a.add(c, mut spots, default_doc)
 	}
 	for f in frags {
@@ -613,6 +663,45 @@ fn (mut a Applier) move(c Change, mut spots map[int]Spot, default_doc int) !int 
 		mut e := f.e
 		e.place(f, sp.t, sp.at)!
 		put_at(mut spots, k, f)
+		a.made[at_key(c.new.i, k)] = f
 	}
 	return frags[0].e.number
+}
+
+// stay puts the lifted fragments of a node whose move is not made back where they were, and
+// files each among its parent's children being filled.
+fn (mut a Applier) stay(frags []ENode, mut spots map[int]Spot) {
+	for f in frags {
+		mut e := f.e
+		e.unlift(f.key)
+		k := e.number
+		mut sp := spots[k] or { continue }
+		if f.parent().key != sp.t.key {
+			continue
+		}
+		x := e.kids(sp.t.key).index(f.key)
+		if x >= 0 && x <= sp.kids.len {
+			sp.kids.insert(x, f.key)
+			if x < sp.at {
+				sp.at++
+			}
+			spots[k] = sp
+		}
+	}
+}
+
+// unlift puts element k, lifted from its original place and not put anywhere, back there.
+fn (mut e Edit) unlift(k u64) {
+	mut ne := e.nodes[k] or { return }
+	if !ne.detached || ne.placed {
+		return
+	}
+	op := e.original_parent(k)
+	if op != no_key {
+		mut pe := e.nodes[op] or { NodeEdit{} }
+		pe.lost--
+		e.nodes[op] = pe
+	}
+	ne.detached = false
+	e.nodes[k] = ne
 }
