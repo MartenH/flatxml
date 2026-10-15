@@ -140,7 +140,7 @@ this element" before "is it in the right place".
    groups, attribute groups, extensions and anonymous types, and keep the appinfo. A synthetic
    schema per construct, and one test per refusal. The real-world schemas compile locally with
    nothing refused, and their counts match an independent count. On the W3C suite: no valid
-   schema rejected; 780 invalid schemas compile because the rule they break is not checked yet,
+   schema rejected; 744 invalid schemas compile because the rule they break is not checked yet,
    617 of them an invalid pattern (step 4) and 46 an enumeration value outside its base type
    (step 4). A missing type is an error when the schema is compiled, where XSD 1.0 allows it
    until the declaration is used: a documented divergence.

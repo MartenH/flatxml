@@ -88,8 +88,8 @@ Results marked *earlier* predate this repository; the parser has not changed sin
   5,318 complex types) compile with nothing refused, in 27–53 ms. Their counts of elements,
   types, enumeration values, patterns and appinfo match an independent count of the files.
 - **The W3C XML Schema test suite** (`tools/xsts.py`, 14,367 XSD 1.0 schema tests): no valid
-  schema rejected. 4,020 valid schemas compile and 249 invalid ones are rejected; 9,317 use
-  constructs outside the subset and are refused; 780 invalid ones compile because the rule they
+  schema rejected. 4,020 valid schemas compile and 307 invalid ones are rejected; 9,295 use
+  constructs outside the subset and are refused; 744 invalid ones compile because the rule they
   break is not checked yet (617 of them an invalid pattern, which the pattern engine of step 4
   will catch); one is a documented divergence (a missing type is an error at once).
 

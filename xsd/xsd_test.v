@@ -246,3 +246,50 @@ fn test_occurrence_counts_of_any_size() {
 	assert s.particles[kids[1]].max == 99
 	assert fails('<xs:complexType name="X"><xs:sequence><xs:element name="a" type="xs:string" minOccurs="79228162514264337593543950336" maxOccurs="79228162514264337593543950335"/></xs:sequence></xs:complexType>').contains('minOccurs is greater than maxOccurs')
 }
+
+fn test_review_cases() {
+	// simple types that derive from each other
+	assert fails('<xs:simpleType name="A"><xs:restriction base="t:B"/></xs:simpleType><xs:simpleType name="B"><xs:restriction base="t:A"/></xs:simpleType>').contains('derives from itself')
+	assert fails('<xs:simpleType name="A"><xs:restriction base="t:A"/></xs:simpleType>').contains('derives from itself')
+	// a maxLength past 2^31 is clamped, not wrapped; one maxLength per restriction
+	s := compile('<xs:simpleType name="L"><xs:restriction base="xs:string"><xs:maxLength value="2147483648"/></xs:restriction></xs:simpleType>')!
+	assert s.simple_types[0].max_length == max_i32
+	assert fails('<xs:simpleType name="L"><xs:restriction base="xs:string"><xs:maxLength value="++5"/></xs:restriction></xs:simpleType>').contains('maxLength must be a non-negative integer')
+	assert fails('<xs:simpleType name="L"><xs:restriction base="xs:string"><xs:maxLength value="5"/><xs:maxLength value="6"/></xs:restriction></xs:simpleType>').contains('xsd:maxLength appears twice')
+	// a shared attribute group reached through two others counts once
+	d := compile('<xs:attributeGroup name="C"><xs:attribute name="c"/></xs:attributeGroup><xs:attributeGroup name="G1"><xs:attributeGroup ref="t:C"/></xs:attributeGroup><xs:attributeGroup name="G2"><xs:attributeGroup ref="t:C"/></xs:attributeGroup><xs:complexType name="T"><xs:attributeGroup ref="t:G1"/><xs:attributeGroup ref="t:G2"/></xs:complexType>')!
+	assert d.complex_types[d.complex_type_named(tns, 'T')?].attrs.len == 1
+	// order: the content model before attributes, an annotation first
+	assert fails('<xs:complexType name="X"><xs:attribute name="a"/><xs:sequence/></xs:complexType>').contains('the content model comes before the attributes')
+	assert fails('<xs:complexType name="X"><xs:sequence/><xs:annotation/></xs:complexType>').contains('xsd:annotation comes first')
+	// an import with no location leaves a note
+	n := compile('<xs:import namespace="urn:x"/>')!
+	assert n.notes[0].contains('has no schemaLocation')
+}
+
+fn test_appinfo_owners_and_markup() {
+	s := compile('<xs:element name="shared" type="xs:string"/><xs:attribute name="g" type="xs:string"/><xs:attributeGroup name="A"><xs:attribute name="a"/></xs:attributeGroup>
+	<xs:complexType name="X">
+	  <xs:sequence><xs:annotation><xs:appinfo>seq</xs:appinfo></xs:annotation>
+	    <xs:element ref="t:shared"><xs:annotation><xs:appinfo>ref</xs:appinfo></xs:annotation></xs:element>
+	  </xs:sequence>
+	  <xs:attribute ref="t:g"><xs:annotation><xs:appinfo>use</xs:appinfo></xs:annotation></xs:attribute>
+	  <xs:attributeGroup ref="t:A"><xs:annotation><xs:appinfo><tag k="v">x &amp; y</tag></xs:appinfo></xs:annotation></xs:attributeGroup>
+	</xs:complexType>')!
+	x := s.complex_type_named(tns, 'X')?
+	seq := s.complex_types[x].particle
+	assert s.appinfo.len == 4
+	assert s.appinfo[0].owner == .particle && s.appinfo[0].idx == s.particle_children(seq)[0]
+	assert s.appinfo[0].text == 'ref'
+	assert s.appinfo[1].owner == .particle && s.appinfo[1].idx == seq
+	assert s.appinfo[2].owner == .attribute_use && s.appinfo[2].idx == x && s.appinfo[2].sub == 0
+	assert s.appinfo[3].owner == .attribute_group_ref && s.appinfo[3].idx == x
+	assert s.appinfo[3].text == '<tag k="v">x &amp; y</tag>'
+}
+
+// The paths of imported documents are copies: they outlive the documents, which load releases.
+fn test_file_paths_outlive_the_documents() {
+	other := write_schema('abs.xsd', '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:abs"/>')
+	s := load(write_schema('imp.xsd', head + '<xs:import namespace="urn:abs" schemaLocation="${other}"/></xs:schema>'))!
+	assert s.files[1] == other
+}

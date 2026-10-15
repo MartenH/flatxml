@@ -69,10 +69,13 @@ fn (mut r Reader) resolve() ! {
 		}
 	}
 	r.check_group_cycles()!
-	// Each complex type gets the attributes of the groups it references.
+	r.check_simple_cycles()!
+	// Each complex type gets the attributes of the groups it references; a use reached through
+	// two groups is one use.
 	for ct in 0 .. r.s.complex_types.len {
 		for g in r.ct_agroups[u32(ct)] or { []u32{} } {
-			r.s.complex_types[ct].attrs << r.flatten(g)!
+			attrs := r.flatten(g)!
+			r.s.complex_types[ct].attrs = union_of(r.s.complex_types[ct].attrs, attrs)
 		}
 	}
 	// Then what it inherits from a type it extends, and a check for an attribute twice.
@@ -150,12 +153,57 @@ fn (mut r Reader) flatten(g u32) ![]AttrUse {
 	r.s.agroups[g].busy = true
 	mut attrs := r.s.agroups[g].attrs.clone()
 	for sub in r.s.agroups[g].refs {
-		attrs << r.flatten(sub)!
+		attrs = union_of(attrs, r.flatten(sub)!)
 	}
 	r.s.agroups[g].attrs = attrs
 	r.s.agroups[g].busy = false
 	r.s.agroups[g].done = true
 	return attrs
+}
+
+// union_of is a then the uses of b whose declaration a does not have: attribute groups combine
+// as sets, so a group reached twice contributes its attributes once.
+fn union_of(a []AttrUse, b []AttrUse) []AttrUse {
+	mut out := a.clone()
+	for u in b {
+		if !out.any(it.decl == u.decl) {
+			out << u
+		}
+	}
+	return out
+}
+
+// check_simple_cycles refuses a simple type that is its own base, directly or through others.
+fn (r &Reader) check_simple_cycles() ! {
+	mut state := []u8{len: r.s.simple_types.len} // 0 unvisited, 1 on the current chain, 2 done
+	for st in 0 .. r.s.simple_types.len {
+		mut chain := []u32{}
+		mut t := u32(st)
+		// Follow the bases until a built-in, a type already checked, or a repeat.
+		for state[t] == 0 {
+			state[t] = 1
+			chain << t
+			b := r.s.simple_types[t].base
+			if b.kind != .simple {
+				break
+			}
+			t = b.idx
+			if state[t] == 1 {
+				return error('type ${r.st_name(t)} derives from itself')
+			}
+		}
+		for c in chain {
+			state[c] = 2
+		}
+	}
+}
+
+fn (r &Reader) st_name(st u32) string {
+	return if r.s.simple_types[st].name.local == 0 {
+		'(anonymous)'
+	} else {
+		r.s.qname(r.s.simple_types[st].name)
+	}
 }
 
 fn (r &Reader) agroup_name(g u32) string {

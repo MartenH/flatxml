@@ -233,3 +233,12 @@ fn test_every_prefix_is_handled() {
 	}
 	assert ok == 1 // only the prefix that drops the final newline is still complete
 }
+
+fn test_inner_xml_writes_content_back() {
+	d := parse_string('<r><a k="1 &amp; &quot;2&quot;">x &lt; y<b/></a>tail<!-- c --><c>t</c></r>') or { panic(err) }
+	assert d.inner_xml(d.root()) == '<a k="1 &amp; &quot;2&quot;">x &lt; y<b/></a>tail<c>t</c>'
+	assert d.inner_xml(d.first_child(d.root())) == 'x &lt; y<b/>'
+	// written back, it parses to the same content
+	again := parse_string('<r>' + d.inner_xml(d.root()) + '</r>') or { panic(err) }
+	assert again.inner_xml(again.root()) == d.inner_xml(d.root())
+}

@@ -115,18 +115,25 @@ pub mut:
 
 pub const no_particle = u32(0)
 
+// OwnerKind says what an annotation belongs to, and so what Appinfo's idx and sub mean.
 pub enum OwnerKind {
 	schema
-	element
-	attribute
-	complex_type
-	simple_type
-	group
-	attribute_group
-	enumeration // idx is the simple type, sub the value's index
+	element         // idx: element declaration
+	attribute       // idx: attribute declaration
+	complex_type    // idx: complex type
+	simple_type     // idx: simple type
+	group           // idx: the group's root particle
+	attribute_group // idx: index into the schema's attribute groups
+	enumeration     // idx: simple type, sub: the value's index
+	particle        // idx: a sequence, choice, element reference or group reference
+	attribute_use   // idx: complex type, sub: the use's index (an attribute reference)
+	group_attribute_use // idx: attribute group, sub: the use's index (an attribute reference)
+	attribute_group_ref // idx: complex type, sub: the reference's ordinal in it
+	group_attribute_group_ref // idx: attribute group, sub: the reference's ordinal in it
 }
 
-// Appinfo is one `xsd:appinfo`, kept as text for the consumer; nothing here interprets it.
+// Appinfo is one `xsd:appinfo`, kept for the consumer; nothing here interprets it. Its content
+// is written back as XML (flatxml's inner_xml), so child elements survive as markup.
 pub struct Appinfo {
 pub:
 	owner  OwnerKind

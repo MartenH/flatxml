@@ -46,6 +46,7 @@ mut:
 	ct_agroups map[u32][]u32 // complex type -> attribute groups it references
 	ct_base    map[u32]u32   // complex type -> the complex type its simple content extends
 	ct_state   []u8          // finish: 0 not yet, 1 in progress, 2 done
+	agroup_ord map[u64]u32   // attribute group references made so far, per owner
 }
 
 // load reads and compiles the schema documents at paths, and the documents they import.
@@ -84,7 +85,7 @@ fn (mut r Reader) read_file(path string) !string {
 	if d.ns_of(root) != xs || d.local_name(root) != 'schema' {
 		return error('${d.pos(root)}: the root element is not xsd:schema')
 	}
-	r.s.files << path
+	r.s.files << path.clone()
 	c0 := DocCtx{
 		d:   d
 		di:  u32(r.docs.len - 1)
@@ -126,7 +127,10 @@ fn (mut r Reader) import(c DocCtx, i u32) ! {
 	r.check_attrs(c, i, ['namespace', 'schemaLocation', 'id'])!
 	r.only_annotations(c, i, .schema, 0)!
 	ns := c.d.attr(i, 'namespace') or { '' }
-	loc := (c.d.attr(i, 'schemaLocation') or { return }).trim_space()
+	loc := (c.d.attr(i, 'schemaLocation') or {
+		r.s.notes << '${c.d.pos(i)}: import of "${ns}" has no schemaLocation: nothing read'
+		return
+	}).trim_space()
 	path := if os.is_abs_path(loc) { loc } else { os.join_path(c.dir, loc) }
 	// schemaLocation is a hint: a document that is not there (or a URL, which is not fetched)
 	// is skipped, and a reference into its namespace then fails as undeclared
@@ -175,7 +179,7 @@ fn (mut r Reader) local_element(c DocCtx, i u32) !u32 {
 			max:  max
 		}
 		r.pend(c, i, .element_ref, p, ref)!
-		r.only_annotations(c, i, .element, 0)!
+		r.only_annotations(c, i, .particle, p)!
 		return p
 	}
 	name := r.required_attr(c, i, 'name')!
@@ -239,10 +243,11 @@ fn (mut r Reader) model_group(c DocCtx, i u32, kind ParticleKind) !u32 {
 	r.check_attrs(c, i, ['minOccurs', 'maxOccurs', 'id'])!
 	min, max := r.occurs(c, i)!
 	mut kids := []u32{}
+	mut notes := []u32{}
 	// Each child is a particle; nested groups put their own children in place first.
 	for ch in r.xs_children(c, i)! {
 		match c.d.local_name(ch) {
-			'annotation' { r.annotation(c, ch, .schema, 0, 0)! }
+			'annotation' { notes << ch }
 			'element' { kids << r.local_element(c, ch)! }
 			'group' { kids << r.group_ref(c, ch)! }
 			'sequence' { kids << r.model_group(c, ch, .sequence)! }
@@ -259,6 +264,9 @@ fn (mut r Reader) model_group(c DocCtx, i u32, kind ParticleKind) !u32 {
 		count: u32(kids.len)
 	}
 	r.s.children << kids
+	for n in notes {
+		r.annotation(c, n, .particle, p, 0)!
+	}
 	return p
 }
 
@@ -273,7 +281,7 @@ fn (mut r Reader) group_ref(c DocCtx, i u32) !u32 {
 		max:  max
 	}
 	r.pend(c, i, .group_ref, p, ref)!
-	r.only_annotations(c, i, .schema, 0)!
+	r.only_annotations(c, i, .particle, p)!
 	return p
 }
 
@@ -332,6 +340,7 @@ fn (mut r Reader) complex_type(c DocCtx, i u32, named bool) !u32 {
 	r.s.complex_types << ct
 	mixed := r.bool_attr(c, i, 'mixed')!
 	mut simple := false
+	mut attributes := false
 	// At most one content model, then the attributes.
 	for ch in r.xs_children(c, i)! {
 		local := c.d.local_name(ch)
@@ -342,6 +351,9 @@ fn (mut r Reader) complex_type(c DocCtx, i u32, named bool) !u32 {
 			'sequence', 'choice', 'group', 'simpleContent' {
 				if simple || r.s.complex_types[idx].particle != no_particle {
 					return error('${c.d.pos(ch)}: a complex type has one content model')
+				}
+				if attributes {
+					return error('${c.d.pos(ch)}: the content model comes before the attributes')
 				}
 				if local == 'simpleContent' {
 					r.simple_content(c, ch, idx)!
@@ -357,12 +369,14 @@ fn (mut r Reader) complex_type(c DocCtx, i u32, named bool) !u32 {
 				if simple {
 					return error('${c.d.pos(ch)}: the attributes of simple content are in its extension')
 				}
+				attributes = true
 				r.attribute_use(c, ch, idx, false)!
 			}
 			'attributeGroup' {
 				if simple {
 					return error('${c.d.pos(ch)}: the attributes of simple content are in its extension')
 				}
+				attributes = true
 				r.agroup_use(c, ch, idx, false)!
 			}
 			else {
@@ -445,18 +459,19 @@ fn (mut r Reader) attribute_use(c DocCtx, i u32, owner u32, in_group bool) ! {
 				return error('${c.d.pos(i)}: an attribute with ref has no ${a}')
 			}
 		}
-		sub := if in_group { r.s.agroups[owner].attrs.len } else { r.s.complex_types[owner].attrs.len }
+		sub := u32(if in_group { r.s.agroups[owner].attrs.len } else { r.s.complex_types[owner].attrs.len })
 		r.pending << Pending{
 			kind:     .attr_ref
 			slot:     owner
-			sub:      u32(sub)
+			sub:      sub
 			in_group: in_group
 			required: required
 			name:     r.qname_value(c, i, ref)!
 			doc:      c.di
 			node:     i
 		}
-		r.only_annotations(c, i, .attribute, 0)!
+		r.only_annotations(c, i, if in_group { .group_attribute_use } else { .attribute_use },
+			owner, int(sub))!
 	} else {
 		qualified := match c.d.attr(i, 'form') or { '' } {
 			'' { c.attr_qualified }
@@ -539,7 +554,11 @@ fn (mut r Reader) agroup_use(c DocCtx, i u32, owner u32, in_group bool) ! {
 		doc:      c.di
 		node:     i
 	}
-	r.only_annotations(c, i, .schema, 0)!
+	key := u64(owner) << 1 | u64(in_group)
+	ord := r.agroup_ord[key]
+	r.agroup_ord[key] = ord + 1
+	r.only_annotations(c, i, if in_group { .group_attribute_group_ref } else { .attribute_group_ref },
+		owner, int(ord))!
 }
 
 // --- simple types --------------------------------------------------------------------------
@@ -584,6 +603,7 @@ fn (mut r Reader) restriction(c DocCtx, i u32, idx u32) ! {
 		r.pend(c, i, .simple_base, idx, base)!
 		based = true
 	}
+	mut seen := map[string]bool{}
 	// An optional inline base type, then the facets.
 	for ch in r.xs_children(c, i)! {
 		local := c.d.local_name(ch)
@@ -595,6 +615,9 @@ fn (mut r Reader) restriction(c DocCtx, i u32, idx u32) ! {
 			if based {
 				return error('${c.d.pos(ch)}: a restriction has one base, named or inline')
 			}
+			if seen.len > 0 {
+				return error('${c.d.pos(ch)}: the inline base type comes before the facets')
+			}
 			r.s.simple_types[idx].base = TypeRef{.simple, r.simple_type(c, ch, false)!}
 			based = true
 			continue
@@ -602,6 +625,10 @@ fn (mut r Reader) restriction(c DocCtx, i u32, idx u32) ! {
 		if local !in supported_facets {
 			return r.refuse(c, ch)
 		}
+		if local in ['whiteSpace', 'maxLength'] && local in seen {
+			return error('${c.d.pos(ch)}: xsd:${local} appears twice in one restriction')
+		}
+		seen[local] = true
 		r.check_attrs(c, ch, ['value', 'id'])!
 		// a copy, since it outlives the document
 		value := (c.d.attr(ch, 'value') or {
@@ -626,11 +653,11 @@ fn (mut r Reader) restriction(c DocCtx, i u32, idx u32) ! {
 				}
 			}
 			else {
-				n := value.trim_space().trim_left('+')
-				if n == '' || !n.bytes().all(it.is_digit()) {
+				n := non_negative(value) or {
 					return error('${c.d.pos(ch)}: maxLength must be a non-negative integer')
 				}
-				r.s.simple_types[idx].max_length = int(capped(n.trim_left('0')) & 0x7FFF_FFFF)
+				c32 := capped(n)
+				r.s.simple_types[idx].max_length = if c32 > u32(max_i32) { max_i32 } else { int(c32) }
 			}
 		}
 		r.only_annotations(c, ch, .simple_type, idx)!
@@ -653,7 +680,7 @@ fn (mut r Reader) annotation(c DocCtx, i u32, owner OwnerKind, idx u32, sub int)
 					idx:    idx
 					sub:    u32(sub)
 					source: (c.d.attr(ch, 'source') or { '' }).clone()
-					text:   c.d.text_content(ch).clone()
+					text:   c.d.inner_xml(ch)
 				}
 			}
 			'documentation' {}
@@ -691,6 +718,9 @@ fn (r &Reader) xs_children(c DocCtx, i u32) ![]u32 {
 		}
 		if d.ns_of(ch) != c.xs {
 			return error('${d.pos(ch)}: <${d.name(ch)}> is not an XSD element')
+		}
+		if out.len > 0 && i != d.root() && d.local_name(ch) == 'annotation' {
+			return error('${d.pos(ch)}: xsd:annotation comes first in xsd:${d.local_name(i)}, once')
 		}
 		out << ch
 		ch = d.next_sibling(ch)
@@ -761,9 +791,18 @@ fn (r &Reader) count_attr(c DocCtx, i u32, name string, may_be_unbounded bool) !
 	if may_be_unbounded && v == 'unbounded' {
 		return v
 	}
-	digits := v.trim_left('+')
-	if digits == '' || v.len - digits.len > 1 || !digits.bytes().all(it.is_digit()) {
-		return error('${c.d.pos(i)}: ${name} must be a non-negative integer${if may_be_unbounded { ' or unbounded' } else { '' }}')
+	return non_negative(v) or {
+		error('${c.d.pos(i)}: ${name} must be a non-negative integer${if may_be_unbounded { ' or unbounded' } else { '' }}')
+	}
+}
+
+// non_negative is a nonNegativeInteger (an optional `+`, then digits) as its digits without
+// leading zeros, so values of any size compare exactly.
+fn non_negative(value string) ?string {
+	v := value.trim_space()
+	digits := if v.starts_with('+') { v[1..] } else { v }
+	if digits == '' || !digits.bytes().all(it.is_digit()) {
+		return none
 	}
 	n := digits.trim_left('0')
 	return if n == '' { '0' } else { n }
