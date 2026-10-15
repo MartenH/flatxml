@@ -82,9 +82,13 @@ Round trips, which need no oracle:
 
 ## Steps
 
-1. **Document sets, handles and navigation** (design 1, 2). The README's examples compile in CI;
-   the benchmark shows the handles cost nothing. The module no longer needs its checkout to be
-   named `flatxml`.
+1. **Document sets, handles and navigation** (design 1, 2, done). `DocSet` parses in parallel and
+   joins each document to one table in the order given: 560 real-world files (169 MB) load in
+   about 80 ms on 16 threads, 230 ms on one. Handles cost what raw index loops cost: on the
+   500 MB benchmark, visiting the children of every element (12.6M) takes 34–37 ms either way,
+   and every element of one name 8–10 ms. The README's examples type-check in CI
+   (`scripts/check_readme_examples.sh`). The library moved into `flatxml/`, so the checkout no
+   longer has to be named `flatxml`.
 2. **Writing** (design 7, unedited): the byte-for-byte round trip, which every later step relies
    on.
 3. **Rules and diff** (design 3, 4), and `flatxml diff`: two files or two directories, the changes

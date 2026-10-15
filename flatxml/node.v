@@ -203,21 +203,19 @@ fn read_bool(s string, def bool) bool {
 
 // --- iteration --------------------------------------------------------------------------------
 
-// Children iterates over child elements, all of them or those with one name id.
+// Children iterates over child elements, all of them or those with one name id. A child's next
+// sibling is where its subtree ends, until the parent's does: one array read per child.
 pub struct Children {
-	doc &Doc = unsafe { nil }
-	tag u32 // text_tag for every element
+	doc  &Doc = unsafe { nil }
+	tag  u32 // text_tag for every element
+	stop u32 // the parent's end
 mut:
 	cur u32
 }
 
 // children are the child elements: `for c in n.children() { ... }`.
 pub fn (n Node) children() Children {
-	return Children{
-		doc: n.doc
-		tag: text_tag
-		cur: if n.i == no_node { no_node } else { n.doc.first_child(n.i) }
-	}
+	return n.children_id(text_tag)
 }
 
 // children_named are the child elements named name.
@@ -231,19 +229,26 @@ pub fn (n Node) children_named(name string) Children {
 	return n.children_id(id)
 }
 
-// children_id are the child elements with name id tag.
+// children_id are the child elements with name id tag (text_tag: all of them).
 pub fn (n Node) children_id(tag u32) Children {
+	if n.i == no_node {
+		return Children{
+			doc: n.doc
+		}
+	}
 	return Children{
-		doc: n.doc
-		tag: tag
-		cur: if n.i == no_node { no_node } else { n.doc.first_child(n.i) }
+		doc:  n.doc
+		tag:  tag
+		stop: n.doc.end[n.i]
+		cur:  n.i + 1
 	}
 }
 
+@[direct_array_access]
 pub fn (mut it Children) next() ?Node {
-	for it.cur != no_node {
+	for it.cur < it.stop {
 		c := it.cur
-		it.cur = it.doc.next_sibling(c)
+		it.cur = it.doc.end[c]
 		t := it.doc.tag[c]
 		if t != text_tag && (it.tag == text_tag || t == it.tag) {
 			return Node{it.doc, c}

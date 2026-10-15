@@ -30,6 +30,9 @@ jobs:
       - name: Unit tests
         run: v test .
 
+      - name: The README's examples type-check
+        run: scripts/check_readme_examples.sh
+
       - name: Build the tools
         run: |
           mkdir -p bin
