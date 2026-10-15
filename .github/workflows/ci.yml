@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a pull request cancels its previous run; every commit on main is verified.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# V3 retries a program it cannot build with a downloaded older compiler unless told not to, which
+# would let a V3 regression pass unseen (the variable is read on every platform, despite its
+# name). V uploads a source excerpt on a C compilation error unless reporting is disabled.
+env:
+  V_MACOS_V3_NO_FALLBACK: 1
+  V_C_ERROR_BUG_REPORT_DISABLED: 1
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pinned V
+        uses: ./.github/actions/setup-v
+
+      - name: Unit tests
+        run: v test .
+
+      - name: Build the tools
+        run: |
+          mkdir -p bin
+          v -o bin/flatxml cmd/cli
+          v -prod -o bin/genxml cmd/genxml
+
+      - name: Identical to expat
+        run: |
+          ./bin/genxml "$RUNNER_TEMP/gen_8.xml" 8
+          tools/check_vs_expat.py bin/flatxml testdata "$RUNNER_TEMP/gen_8.xml"

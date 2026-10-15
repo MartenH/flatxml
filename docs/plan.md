@@ -7,6 +7,15 @@ read values by their declared type.
 Everything here is generic. Nothing in this repository knows about any particular vocabulary.
 What a vocabulary's annotations and value conventions *mean* is for its consumer to decide.
 
+## Principles
+
+- **A schema is optional.** A document is read without one exactly as today, by the same calls at
+  the same cost. Schema support is a layer a caller opts into; no step below makes the
+  schemaless path slower, except the namespace ids of step 1, within its budget.
+- **The flat tree is the representation.** Every later layer (namespaces, declarations, typed
+  values) is one more array beside the node arrays, indexed by node. None adds pointers into the
+  tree or builds a second one.
+
 ## Test data
 
 - Every schema and document committed here is written here. No third-party schema or document is
@@ -94,16 +103,22 @@ a real schema needs it, with its own tests.
 
 ## Verification
 
-- **Oracle: libxml2, through lxml** (`etree.XMLSchema`). It gets the same schema and document,
-  and the two must agree on the verdict and on where each finding is (line and element). The
-  wording may differ. This runs on the schemas written here and on generated mutations of valid
+- **Oracle: the W3C XML Schema test suite** (`w3c/xsdtests`), from step 2 on. Its expected
+  verdicts were written by the specification's authors, so they are independent of this code and
+  of libxml2. It is fetched at a pinned commit in CI and never committed. It ships no driver: a
+  small runner reads its index, runs every XSD 1.0 test whose schema compiles, and counts the
+  rest as out of scope, not as failures.
+- **Second opinion: libxml2, through lxml** (`etree.XMLSchema`). It gets the same schema and
+  document, and the two must agree on the verdict and on where each finding is (line and element).
+  The wording may differ. This runs on the schemas written here and on generated mutations of valid
   documents, the way the parser was fuzzed against expat with 4,000 mutations.
 - **Locally, on the real-world schemas** the scope was measured on: each compiles with nothing
   refused, and real documents are validated and compared with lxml. Only counts are recorded.
 - **Parser oracle:** expat, as before. The expat checker comes here in step 0 and gains a
   namespace mode in step 1.
-- **Performance:** validating the 500 MB generated file should take no longer than parsing it
-  (0.38 s), since it is one more linear pass of table lookups with a regex on some leaves. Peak
+- **Performance:** `cmd/genxml` gains a schema for the documents it writes, so the validation
+  benchmark is ours end to end. Validating the 500 MB document should take no longer than parsing
+  it (about 1.2 s), since it is one more linear pass of table lookups with a regex on some leaves. Peak
   memory is recorded with it.
 
 ## Steps
@@ -112,9 +127,9 @@ Each step is one PR with its own tests. Steps 1–3 are what consumers need firs
 (5) comes last because it costs the most and is needed least: a consumer usually needs "what is
 this element" before "is it in the right place".
 
-0. **Setup.** CI on Linux with the `.v-version` pin. An expat cross-check
-   (`tools/check_vs_expat.py`) driven by a small `cmd/flatxml` with a `dump` command. A generator
-   of synthetic documents for the benchmark.
+0. **Setup** (done). CI on Linux with the pinned V. An expat cross-check
+   (`tools/check_vs_expat.py`) driven by `cmd/cli` (`flatxml dump`, `flatxml stats`), and a
+   generator of synthetic documents for the benchmark (`cmd/genxml`, `tools/bench.sh`).
 1. **Namespaces** (design 1). Done when the namespace mode of the expat check is identical on
    `testdata/` and on the local real files, and parse time is within budget.
 2. **Schema reader** (design 2, 8, 9). Compile the subset, refuse everything else, resolve groups,

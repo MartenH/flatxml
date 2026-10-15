@@ -1,0 +1,145 @@
+// flatxml — command-line access to the parser.
+//
+//   flatxml dump <file>            one line per element and per run of text, for
+//                                  tools/check_vs_expat.py
+//   flatxml stats <file>...        parse each file and print its size, node counts and parse time
+module main
+
+import flatxml
+import os
+import strings
+import time
+
+const usage = 'usage:
+  flatxml dump <file>           canonical element/text stream, for tools/check_vs_expat.py
+  flatxml stats <file>...       size, node counts and parse time of each file'
+
+fn main() {
+	args := os.args[1..]
+	if args.len < 2 {
+		eprintln(usage)
+		exit(2)
+	}
+	match args[0] {
+		'dump' {
+			if args.len != 2 {
+				eprintln(usage)
+				exit(2)
+			}
+			dump_events(args[1])
+		}
+		'stats' {
+			mut failed := false
+			for p in args[1..] {
+				print_stats(p) or {
+					eprintln(err)
+					failed = true
+				}
+			}
+			if failed {
+				exit(1)
+			}
+		}
+		else {
+			eprintln(usage)
+			exit(2)
+		}
+	}
+}
+
+// print_stats parses one file and prints what it holds and how long the parse took.
+fn print_stats(path string) ! {
+	sw := time.new_stopwatch()
+	mut d := flatxml.parse_file(path)!
+	took := sw.elapsed()
+	used, reserved := d.node_bytes()
+	texts := d.text_node_count()
+	println('${path}')
+	println('  ${mb(d.src_len)}, parsed in ${ms(took)} ${rate(d.src_len, took)}')
+	println('  ${d.len() - 1 - texts} elements, ${texts} text nodes, ${d.attr_tag.len} attributes, ${d.names.len - 2} distinct names')
+	println('  node arrays ${mb(used)} used, ${mb(reserved)} reserved')
+	d.free()
+}
+
+// dump_events writes `E depth name attr=value...` per element and `T depth text` per run of text,
+// the text decoded and trimmed, and empty runs left out; depth is the containing element's.
+fn dump_events(path string) {
+	d := flatxml.parse_file(path) or {
+		eprintln(err)
+		exit(1)
+	}
+	mut out := os.stdout()
+	mut sb := strings.new_builder(1 << 20)
+	mut depth := []u32{len: d.len()}
+	mut run := strings.new_builder(256)
+	mut run_parent := u32(0)
+	// Walk the nodes in document order; a run of text nodes under one parent is joined into one line.
+	for k in 1 .. d.len() {
+		i := u32(k)
+		p := d.parent[i]
+		depth[k] = depth[p] + 1
+		if d.is_text(i) {
+			if run.len > 0 && run_parent != p {
+				flush_run(mut sb, mut run, depth[run_parent])
+			}
+			run.write_string(d.text(i))
+			run_parent = p
+			continue
+		}
+		if run.len > 0 {
+			flush_run(mut sb, mut run, depth[run_parent])
+		}
+		sb.write_string('E ${depth[k]} ${d.name(i)}')
+		lo, hi := d.attr_range(i)
+		for a := lo; a < hi; a++ {
+			sb.write_string(' ${d.attr_name(a)}=${esc(d.attr_value(a))}')
+		}
+		sb.write_u8(`\n`)
+		if d.text_len[i] != 0 {
+			run.write_string(d.text(i))
+			flush_run(mut sb, mut run, depth[k])
+		}
+		if sb.len > 1 << 20 {
+			write_or_exit(mut out, sb.str())
+		}
+	}
+	if run.len > 0 {
+		flush_run(mut sb, mut run, depth[run_parent])
+	}
+	write_or_exit(mut out, sb.str())
+}
+
+// write_or_exit writes s, or exits with status 1: a truncated dump must not look like a whole one.
+fn write_or_exit(mut out os.File, s string) {
+	out.write_string(s) or {
+		eprintln('flatxml: ${err}')
+		exit(1)
+	}
+}
+
+fn flush_run(mut sb strings.Builder, mut run strings.Builder, depth u32) {
+	t := run.str().trim(' \t\n\r')
+	if t.len > 0 {
+		sb.write_string('T ${depth} ${esc(t)}\n')
+	}
+}
+
+fn esc(s string) string {
+	return s.replace('\\', '\\\\').replace('\n', '\\n').replace('\t', '\\t').replace('\r', '\\r')
+}
+
+fn mb(b i64) string {
+	return '${f64(b) / (1024 * 1024):.1f} MB'
+}
+
+fn ms(d time.Duration) string {
+	return '${f64(d.microseconds()) / 1000:.1f} ms'
+}
+
+fn rate(b i64, d time.Duration) string {
+	s := f64(d.microseconds()) / 1e6
+	if s <= 0 {
+		return ''
+	}
+	return '(${f64(b) / (1024 * 1024) / s:.1f} MB/s)'
+}

@@ -51,18 +51,17 @@ These measurements predate this repository. The parser has not changed since.
   and one tree difference, which is the DTD default attribute listed under limitations.
 - **Past 2 GiB**: a 3 GB file (32.8M nodes, offsets beyond 2³¹) parses in 2.8 s.
 
-The expat checker and the benchmark generator are not in this repository yet. Adding them is step
-0 of the plan.
-
 ## Benchmark
 
-A 500 MB generated file, warm in the page cache, on an Intel Core Ultra 9 285H under WSL2:
+`tools/bench.sh 500`: a 500 MB document from `cmd/genxml`, warm in the page cache, on an Intel
+Core Ultra 9 285H under WSL2. It is dense: 12.6M elements and 12.3M attributes, an element every
+41 bytes. Speed per byte depends on that density, so compare files of the same shape.
 
-| | wall | peak RSS |
+| parse only | wall | peak RSS |
 |---|---|---|
-| **flatxml**, parse only | 378 ms (1.3 GB/s) | not measured alone |
-| Python `xml.etree.ElementTree`, parse only | 6.6 s | 2.5 GB |
-| lxml 5.3, parse only | 5.5 s | 2.6 GB |
+| **flatxml** | 1.2–1.9 s (the parse itself 1.1–1.3 s: about 400 MB/s, 10M elements/s) | 1.1 GB, of which 500 MB is the mapped file |
+| Python `xml.etree.ElementTree` | 13.5 s | 5.7 GB |
+| lxml 5.3.1 (libxml2 2.12.9) | 12.2 s | 7.1 GB |
 
 ## Limitations
 
@@ -73,6 +72,8 @@ Non-validating, and lenient where that does not change how a well-formed file re
   accepted.
 - The DTD is skipped: entities it declares are unknown (an error on use), and default attribute
   values it declares are not applied.
+- Text is returned as the document's bytes. A document in an encoding other than UTF-8 (or
+  ASCII), such as ISO-8859-1 or UTF-16, is not converted.
 - No namespace processing yet. Names are compared as written. This is step 1 of the plan.
 - Whitespace-only text between tags is dropped, except in CDATA. In mixed content, this includes a
   whitespace-only run between two comments.
@@ -86,8 +87,16 @@ Linux too):
 
 ```sh
 export V_MACOS_V3_NO_FALLBACK=1
-v test .
+v test .                                       # unit tests
+mkdir -p bin && v -o bin/flatxml cmd/cli       # flatxml dump | stats
+v -prod -o bin/genxml cmd/genxml               # genxml <out.xml> <megabytes>
+tools/check_vs_expat.py bin/flatxml testdata   # identical to expat, element for element
+tools/bench.sh 500                             # against ElementTree and lxml
 ```
+
+CI (`.github/workflows/ci.yml`) builds the pinned V (`.v-version`, and its C bootstrap at
+`.vc-version`), runs the unit tests, and checks `testdata/` and an 8 MB generated document against
+expat.
 
 ## Licence
 
