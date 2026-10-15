@@ -128,6 +128,7 @@ pub fn (mut d Doc) free() {
 	}
 	if d.own_tab {
 		d.tab.free()
+		d.own_tab = false
 	}
 }
 

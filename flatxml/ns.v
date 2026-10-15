@@ -168,7 +168,6 @@ fn (d &Doc) decl_target(slot u32) string {
 // Before `resolve_namespaces` has run, ns_of and attr_ns_of answer no_ns and ns_uri knows the
 // reserved ids; the local-name readers need it to have run, and say so.
 
-const reserved_ns_uris = ['', xml_ns_uri, xmlns_ns_uri]
 
 fn (d &Doc) need_split() {
 	if d.ns.len != d.tag.len {
@@ -222,7 +221,7 @@ pub fn (d &Doc) is_ns_decl(a u32) bool {
 
 // ns_uri is the URI of namespace id; '' for no namespace.
 pub fn (d &Doc) ns_uri(id u32) string {
-	return if int(id) < d.tab.uris.len { d.tab.uris[id] } else { reserved_ns_uris[id] }
+	return d.tab.uris[id]
 }
 
 // ns_id is the id of a namespace URI, if the document declares it (or it is reserved). In a set,

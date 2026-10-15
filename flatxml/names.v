@@ -79,9 +79,13 @@ pub fn (t &Names) id(name string) ?u32 {
 
 // intern returns the id of the name in p[..len], adding it the first time it is seen. The
 // table is keyed by the bytes in the source, so a name is copied once, not per use.
-@[direct_array_access]
 fn (mut t Names) intern(p &u8, len int) u32 {
-	h := hash.wyhash_c(p, u64(len), name_seed)
+	return t.intern_hashed(p, len, hash.wyhash_c(p, u64(len), name_seed))
+}
+
+// intern_hashed is intern with the name's hash already known (from another table).
+@[direct_array_access]
+fn (mut t Names) intern_hashed(p &u8, len int, h u64) u32 {
 	mask := u64(t.slots.len - 1)
 	mut k := h & mask
 	for {

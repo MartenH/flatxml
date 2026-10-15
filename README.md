@@ -21,7 +21,7 @@ println('{${doc.ns_uri(doc.ns_of(doc.root()))}}${doc.local_name(doc.root())}')
 // Many files as one set: read in parallel, sharing one name table, so a name has one id in all.
 mut set := flatxml.DocSet.new()
 for e in set.load(['a.xml', 'b.xml'], namespaces: true) {
-	eprintln('${e.path}: ${e.msg}')
+	eprintln(e.msg) // names the file, and the line where there is one
 }
 items := set.tab.path('items/item') // compiled once, for every document of the set
 for d in set.docs {
@@ -56,7 +56,7 @@ is text keeps that text on the element. Text nodes exist only for mixed content.
 small hash table keyed on the source bytes, and the `parent` array is the stack of open elements.
 
 **Names** are interned in a table (`Names`) the document points to. The documents of a set
-(`DocSet`) share one: each file is parsed on a thread of its own into a table of its own, then
+(`DocSet`) share one: files are parsed on up to 16 threads, each into a table of its own, then
 joined to the set's in the order given, its ids rewritten in one pass over its arrays. So across
 any number of files a name is one integer, and the result does not depend on which thread
 finished first. 560 real-world files, 169 MB, load in about 80 ms on 16 threads (230 ms on one),

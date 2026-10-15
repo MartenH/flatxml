@@ -484,7 +484,7 @@ fn load_set(args []string) {
 	println('${s.docs.len} files, ${mb(bytes)}, listed in ${ms(listed)}, read in ${ms(took)} ${rate(bytes, took)}')
 	println('  ${nodes} nodes, ${attrs} attributes, ${s.tab.len() - 2} distinct names')
 	for e in errs {
-		println('  failed: ${e.path}: ${one_line(e.msg)}')
+		println('  failed: ${one_line(e.msg)}')
 	}
 	if errs.len > 0 {
 		exit(1)

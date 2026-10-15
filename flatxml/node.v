@@ -67,13 +67,19 @@ pub fn (n Node) attr(name string) string {
 	return n.doc.attr(n.i, name) or { '' }
 }
 
-// has_attr reports whether the element has the attribute name.
+// has_attr reports whether the element has the attribute name; its value is not read.
 pub fn (n Node) has_attr(name string) bool {
 	if n.i == no_node {
 		return false
 	}
-	_ := n.doc.attr(n.i, name) or { return false }
-	return true
+	id := n.doc.tab.id(name) or { return false }
+	lo, hi := n.doc.attr_range(n.i)
+	for a := lo; a < hi; a++ {
+		if n.doc.attr_tag[a] == id {
+			return true
+		}
+	}
+	return false
 }
 
 // parent is the parent element; empty for the root.
@@ -119,9 +125,10 @@ pub fn (n Node) child(name string) Node {
 }
 
 // child_id is the first child element with name id tag: child without the name lookup, for loops.
+// text_tag means any element, as for children_id.
 pub fn (n Node) child_id(tag u32) Node {
-	if n.i == no_node {
-		return n
+	if n.i == no_node || tag == text_tag {
+		return n.first()
 	}
 	return Node{n.doc, n.doc.child(n.i, tag)}
 }
@@ -185,9 +192,42 @@ fn read_int(s string, def i64) i64 {
 	return t.parse_int(10, 64) or { def }
 }
 
+// read_f64 reads XML's decimal and float forms: an optional sign, digits with an optional
+// fraction, and an optional exponent.
 fn read_f64(s string, def f64) f64 {
 	t := s.trim_space()
-	if t == '' {
+	mut k := 0
+	if k < t.len && (t[k] == `-` || t[k] == `+`) {
+		k++
+	}
+	mut digits := 0
+	for k < t.len && t[k].is_digit() {
+		k++
+		digits++
+	}
+	if k < t.len && t[k] == `.` {
+		k++
+		for k < t.len && t[k].is_digit() {
+			k++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return def
+	}
+	if k < t.len && (t[k] == `e` || t[k] == `E`) {
+		k++
+		if k < t.len && (t[k] == `-` || t[k] == `+`) {
+			k++
+		}
+		if k == t.len || !t[k].is_digit() {
+			return def
+		}
+		for k < t.len && t[k].is_digit() {
+			k++
+		}
+	}
+	if k != t.len {
 		return def
 	}
 	return strconv.atof64(t) or { def }
@@ -278,7 +318,7 @@ pub fn (n Node) descendants(name string) Descendants {
 	return n.descendants_id(id)
 }
 
-// descendants_id are the elements below n with name id tag.
+// descendants_id are the elements below n with name id tag (text_tag: all of them).
 pub fn (n Node) descendants_id(tag u32) Descendants {
 	if n.i == no_node {
 		return Descendants{
@@ -298,7 +338,8 @@ pub fn (mut it Descendants) next() ?Node {
 	for it.cur < it.end {
 		c := it.cur
 		it.cur++
-		if it.doc.tag[c] == it.tag {
+		t := it.doc.tag[c]
+		if t != text_tag && (t == it.tag || it.tag == text_tag) {
 			return Node{it.doc, c}
 		}
 	}
@@ -308,9 +349,13 @@ pub fn (mut it Descendants) next() ?Node {
 // --- paths ------------------------------------------------------------------------------------
 
 // Path is a path of child element names, `a/b/c`, compiled once to name ids so finding it costs
-// no hashing. A name the table does not have matches nothing.
+// no hashing. It remembers its table: used on a document with another table, or after a name it
+// did not find has been added to its own, its names are looked up again.
 pub struct Path {
-	ids []u32
+	names []string
+	ids   []u32
+	tab   &Names = unsafe { nil }
+	known int // the table's length when the ids were looked up
 }
 
 const no_name = u32(0xFFFF_FFFF)
@@ -318,17 +363,33 @@ const no_name = u32(0xFFFF_FFFF)
 // path compiles p (names separated by `/`) against the table: a set's table serves every
 // document of the set.
 pub fn (t &Names) path(p string) Path {
+	names := p.split('/').filter(it != '')
 	return Path{
-		ids: p.split('/').filter(it != '').map(t.id(it) or { no_name })
+		names: names
+		ids:   t.ids_of(names)
+		tab:   t
+		known: t.names.len
 	}
+}
+
+fn (t &Names) ids_of(names []string) []u32 {
+	return names.map(t.id(it) or { no_name })
+}
+
+// ids_for is p's ids in table t.
+fn (p &Path) ids_for(t &Names) []u32 {
+	if voidptr(t) == voidptr(p.tab) && (t.names.len == p.known || no_name !in p.ids) {
+		return p.ids
+	}
+	return t.ids_of(p.names)
 }
 
 // find is the first element, in document order, at path p below n.
 pub fn (n Node) find(p Path) Node {
-	if n.i == no_node || p.ids.len == 0 {
+	if n.i == no_node || p.names.len == 0 {
 		return Node{n.doc, no_node}
 	}
-	return Node{n.doc, n.doc.find_from(n.i, p.ids, 0)}
+	return Node{n.doc, n.doc.find_from(n.i, p.ids_for(n.doc.tab), 0)}
 }
 
 // at is find with the path compiled on the spot: for a one-off lookup.
@@ -342,8 +403,8 @@ pub fn (n Node) at(p string) Node {
 // find_all is every element at path p below n, in document order.
 pub fn (n Node) find_all(p Path) []Node {
 	mut out := []Node{}
-	if n.i != no_node && p.ids.len > 0 {
-		n.doc.collect(n.i, p.ids, 0, mut out)
+	if n.i != no_node && p.names.len > 0 {
+		n.doc.collect(n.i, p.ids_for(n.doc.tab), 0, mut out)
 	}
 	return out
 }

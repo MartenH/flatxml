@@ -25,7 +25,8 @@ pub:
 	namespaces bool // resolve each document's namespaces (in parallel, before it joins the set)
 }
 
-// LoadError is a file that could not be read: its path and why.
+// LoadError is a file that could not be read: its path, and why (a message that names the file,
+// with the line and column where there is one).
 pub struct LoadError {
 pub:
 	path string
@@ -105,7 +106,14 @@ fn parse_one(k int, path string, namespaces bool) Parsed {
 // resolved) are given the set's ids, and its own table is released. A document belongs to one
 // set; one that already shares another table is refused.
 pub fn (mut s DocSet) add(mut d Doc) u32 {
-	if voidptr(d.tab) != voidptr(s.tab) {
+	if voidptr(d.tab) == voidptr(s.tab) {
+		// already a member: its number, not a second entry
+		for k, m in s.docs {
+			if voidptr(m) == voidptr(d) {
+				return u32(k)
+			}
+		}
+	} else {
 		if !d.own_tab {
 			panic('flatxml: ${d.path} already belongs to a set')
 		}
@@ -123,7 +131,8 @@ fn (mut s DocSet) join(mut d Doc) {
 	mut remap := []u32{len: own.names.len}
 	remap[1] = 1
 	for id in 2 .. own.names.len {
-		remap[id] = t.intern_str(own.names[id])
+		name := own.names[id]
+		remap[id] = t.intern_hashed(name.str, name.len, own.hash[id])
 	}
 	for i in 0 .. d.tag.len {
 		d.tag[i] = remap[d.tag[i]]

@@ -128,3 +128,33 @@ fn test_paths() {
 	d2 := parse_string('<r><a/><a><b>found</b></a></r>') or { panic(err) }
 	assert d2.root_node().at('a/b').text() == 'found'
 }
+
+fn test_review_cases() {
+	// a path compiled against one table finds by name in a document with another
+	d1 := parse_string('<r><a><b>1</b></a></r>') or { panic(err) }
+	d2 := parse_string('<r><x/><y/><b/><a><b>2</b></a></r>') or { panic(err) }
+	p := d1.tab.path('a/b')
+	assert d2.root_node().find(p).text() == '2'
+	// ... and one compiled before the names it needs were loaded finds them after
+	mut s := DocSet.new()
+	early := s.tab.path('a/b')
+	mut d3 := parse_string('<r><a><b>3</b></a></r>') or { panic(err) }
+	s.add(mut d3)
+	assert d3.root_node().find(early).text() == '3'
+	// adding a member again gives its number, not a second entry
+	assert s.add(mut d3) == 0 && s.docs.len == 1
+	// numbers in XML's forms only
+	d := parse_string('<r><a>1_000</a><b>nan</b><c> -1.5e3 </c><d>.5</d><e>1e</e></r>') or { panic(err) }
+	r := d.root_node()
+	assert r.child('a').f64(-1) == -1 && r.child('b').f64(-1) == -1 && r.child('e').f64(-1) == -1
+	assert r.child('c').f64(0) == -1500 && r.child('d').f64(0) == 0.5
+	// text_tag means any element, never a text node
+	m := parse_string('<r>t<b k="&amp;"/>u</r>') or { panic(err) }
+	assert m.root_node().child_id(text_tag).name() == 'b'
+	mut all := 0
+	for _ in m.root_node().descendants_id(text_tag) {
+		all++
+	}
+	assert all == 1
+	assert m.root_node().child('b').has_attr('k') && !m.root_node().child('b').has_attr('z')
+}
