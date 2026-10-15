@@ -158,6 +158,30 @@ println(doc.outer_xml(item.i)) // written from the tree, with its namespace decl
 println('<v>${flatxml.escape_text('a < b')}</v>')
 ```
 
+**Editing.** An edit set (`Doc.edit`) keeps changes beside the document, keyed by node, and never
+rewrites its arrays: set an element's text, set or remove an attribute, insert an element (parsed
+from a string, or copied from any node of any document), remove one, move one. It reads through
+its changes (`ENode`: name, text, attributes, children, parent, as edited), so a chain of edits
+can be made on what earlier ones did, and inside inserted content too. Written, it copies every
+byte no edit touched; an element with a changed attribute keeps its other attributes as written,
+a removed element takes the indentation before it, and an inserted one gets its neighbours'. An
+element moved or copied keeps the namespaces of where it was read: where they differ at its new
+place, it is given the declarations that restore them, `xmlns=""` included. A fragment is read in
+the namespaces in scope where it is first put. `flatxml edit` applies a script of edits from the
+command line.
+
+```v
+import flatxml
+
+mut doc := flatxml.parse_file('model.xml')!
+mut ed := doc.edit()
+items := ed.root().child('items')
+ed.set_attr(items.children()[0], 'price', '9.50')!
+ed.insert(items, 0, '<item id="new"/>')!
+ed.remove(items.child('obsolete'))!
+ed.write_file('model.xml')! // every byte no edit touched stays as it was
+```
+
 **XML Schema.** `flatxml.xsd` compiles schema documents into flat tables the same way: components
 in arrays, referring to each other by index. `xsd.load(paths...)` reads the documents and what
 they import, resolves every reference, expands groups and attribute groups, and gives a type
@@ -276,9 +300,10 @@ each is good at, and what it is not:
 - **flatxml** builds a read-only tree of the whole document, navigable in every direction, in
   28 bytes a node, with every name interned and text left in the file until it is read, and
   validates against a schema in a fraction of the parse. Namespaces and XSD validation are layers
-  over that tree, each opt-in. It writes a document back byte for byte. It is not good at:
-  changing a document (the tree is read-only; editing is a planned layer,
-  [docs/documents.md](docs/documents.md)), documents that do not fit in memory or exceed 4 GiB (it maps the
+  over that tree, each opt-in. It writes a document back byte for byte, and edits are a layer
+  over the tree that writes only what they change. It is not good at: changing a document in place
+  (the tree is read-only; an edit set reads through its changes, which costs a little per read),
+  documents that do not fit in memory or exceed 4 GiB (it maps the
   whole file; there is no streaming mode), XML 1.1, DTDs (skipped), and names and UTF-8 (not
   checked). Its XSD support is a measured subset. It is a V library.
 - **quick-xml** (Rust) is a pull parser: it hands out events and keeps no tree, so it streams a
@@ -395,6 +420,11 @@ Non-validating, and lenient where that does not change how a well-formed file re
 - Whitespace-only text between tags is dropped, except in CDATA. In mixed content, this includes a
   whitespace-only run between two comments.
 - A document must be smaller than 4 GiB, because offsets are `u32`.
+- Edits: values are written as UTF-8, so a document in another encoding is not edited correctly.
+  Setting the text of an element with mixed content replaces its first run of text and removes
+  the others. A moved or copied element is given every binding that differs at its new
+  place, used in its names or not, since a value such as `xsi:type="p:T"` may use one; they are
+  not among the attributes the edit set reads (`ENode.attrs`).
 
 ## Build and test
 
@@ -421,6 +451,7 @@ bin/flatxml schema model.xsd                   # compile a schema, print what it
 bin/flatxml validate model.xsd model.xml       # check a document against it
 tools/patterns_vs_lxml.py bin/flatxml model.xsd   # its patterns against libxml2's, string by string
 tools/content_vs_lxml.py bin/flatxml model.xsd *.xml   # edited documents against libxml2's verdicts
+tools/edits_vs_lxml.py bin/flatxml *.xml       # random edits, made by flatxml and by lxml
 scripts/fetch_xsts.sh /tmp/xsts && tools/xsts.py bin/flatxml /tmp/xsts   # W3C schema tests
 ```
 
