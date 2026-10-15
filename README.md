@@ -175,7 +175,10 @@ it was read: where they differ at its new place, it is given the declarations th
 refused if a prefix it uses is bound neither there nor in it. `flatxml edit` applies a script of
 edits from the command line. A merged view is edited the same way (`Merged.edit`): a value in
 every file that holds it, structure in the file the caller names, each changed file written back
-to its own path; and a diff is applied to its old view so (`Diff.apply`, `flatxml apply`).
+to its own path; and a diff is applied to its old view so (`Diff.apply`, `flatxml apply`). Two
+changed versions of one base merge the same way (`merge3`, `flatxml merge3`): what only one side
+changes is taken, the same change on both once, and where they disagree ours is kept and the
+conflict listed, with its place in all three.
 
 ```v
 import flatxml
@@ -463,6 +466,7 @@ bin/flatxml merge --rules rules.txt parts/      # many files read as one by rule
 bin/flatxml merge --rules rules.txt -o all.xml parts/   # ... and written as one document
 bin/flatxml diff [--rules rules.txt] old/ new/  # what changed: removed, added, moved, texts, attributes
 bin/flatxml apply --check old/ new/ out/       # that diff applied to old's files, written to out/
+bin/flatxml merge3 base/ ours/ theirs/ out/   # both changes made on base, conflicts listed
 tools/diff_vs_edits.py bin/flatxml *.xml       # known edits, each reported as exactly that change
 bin/flatxml schema model.xsd                   # compile a schema, print what it holds
 bin/flatxml validate model.xsd model.xml       # check a document against it
