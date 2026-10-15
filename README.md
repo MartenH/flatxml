@@ -51,18 +51,17 @@ These measurements predate this repository. The parser has not changed since.
   and one tree difference, which is the DTD default attribute listed under limitations.
 - **Past 2 GiB**: a 3 GB file (32.8M nodes, offsets beyond 2³¹) parses in 2.8 s.
 
-The expat checker and the benchmark generator are not in this repository yet. Adding them is step
-0 of the plan.
-
 ## Benchmark
 
-A 500 MB generated file, warm in the page cache, on an Intel Core Ultra 9 285H under WSL2:
+`tools/bench.sh 500`: a 500 MB document from `cmd/genxml`, warm in the page cache, on an Intel
+Core Ultra 9 285H under WSL2. It is dense: 12.8M elements and 12.4M attributes, an element every
+41 bytes. Speed per byte depends on that density, so compare files of the same shape.
 
-| | wall | peak RSS |
+| parse only | wall | peak RSS |
 |---|---|---|
-| **flatxml**, parse only | 378 ms (1.3 GB/s) | not measured alone |
-| Python `xml.etree.ElementTree`, parse only | 6.6 s | 2.5 GB |
-| lxml 5.3, parse only | 5.5 s | 2.6 GB |
+| **flatxml** | 1.47 s (parse 1.44 s, 347 MB/s, 8.9M elements/s) | 1.3 GB, of which 500 MB is the mapped file |
+| Python `xml.etree.ElementTree` | 13.1 s | 5.8 GB |
+| lxml 5.3.1 (libxml2 2.12.9) | 12.5 s | 7.2 GB |
 
 ## Limitations
 
@@ -86,8 +85,16 @@ Linux too):
 
 ```sh
 export V_MACOS_V3_NO_FALLBACK=1
-v test .
+v test .                                       # unit tests
+mkdir -p bin && v -o bin/flatxml cmd/cli       # flatxml dump | stats
+v -prod -o bin/genxml cmd/genxml               # genxml <out.xml> <megabytes>
+tools/check_vs_expat.py bin/flatxml testdata   # identical to expat, element for element
+tools/bench.sh 500                             # against ElementTree and lxml
 ```
+
+CI (`.github/workflows/ci.yml`) builds the pinned V (`.v-version`, and its C bootstrap at
+`.vc-version`), runs the unit tests, and checks `testdata/` and an 8 MB generated document against
+expat.
 
 ## Licence
 
