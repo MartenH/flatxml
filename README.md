@@ -111,21 +111,84 @@ Results marked *earlier* predate this repository; the parser has not changed sin
 - **Validation of real-world files**: 463 of the 697 files, against the schema each declares,
   agree with libxml2 on every verdict (461 valid; 2 invalid, reported at the same line).
 
-## Benchmark
+## How it compares
 
-`tools/bench.sh 500`: a 500 MB document from `cmd/genxml`, warm in the page cache, on an Intel
-Core Ultra 9 285H under WSL2. It is dense: 12.6M elements and 12.3M attributes, an element every
-41 bytes. Speed per byte depends on that density, so compare files of the same shape.
+Each tool below does different work, so the tables say what each one builds and checks. What
+each is good at, and what it is not:
 
-| parse only | wall | peak RSS |
-|---|---|---|
-| **flatxml** | 1.2–1.9 s (the parse itself 1.1–1.3 s: about 400 MB/s, 10M elements/s) | 1.1 GB, of which 500 MB is the mapped file |
-| Python `xml.etree.ElementTree` | 13.5 s | 5.7 GB |
-| lxml 5.3.1 (libxml2 2.12.9) | 12.2 s | 7.1 GB |
+- **flatxml** builds a tree of the whole document, navigable in every direction, about as fast
+  as a pull parser reads events, in 28 bytes a node, with text left in the file until it is
+  read. Namespaces and XSD validation are layers over that tree, each opt-in. It is not good at:
+  changing a document (the tree is read-only; editing is a later layer), documents that do not
+  fit in memory or exceed 4 GiB (it maps the whole file; there is no streaming mode), XML 1.1,
+  DTDs (skipped), names and UTF-8 (not checked), and many small files, where its fixed cost per
+  file shows. Its XSD support is a measured subset, and it does not yet check values or the order
+  of children. It is a V library.
+- **quick-xml** (Rust) is a pull parser: it hands out events and keeps no tree, so it streams a
+  document of any size in a small buffer, and it also writes XML. Navigating a document (up,
+  sideways, back) is left to the caller. It does not validate.
+- **pugixml** (C++) builds a mutable tree in place, with XPath 1.0, and saves it again. It does
+  not process namespaces and does not validate.
+- **lxml** (libxml2, Python) is the complete one: XSD, DTD, RELAX NG, XPath, XSLT, namespaces,
+  HTML. Its XSD verdicts on the W3C suite are right 97% of the time for schemas and 99.6% for
+  documents. On large documents it is slow and very large.
+- **xmlschema** (Python) is the most conformant XSD 1.0 and 1.1 validator here, and decodes
+  documents into data. Being pure Python, it is the slowest by far.
+- **ElementTree** (Python's standard library) is always there. It is slow and does not validate.
+
+All numbers: an Intel Core Ultra 9 285H under WSL2, files warm in the page cache, flatxml built
+with `-prod` (GCC 13.3, `-O3 -flto`), medians where runs vary.
+
+**Parsing a large document.** A 500 MB document from `cmd/genxml`: 12.6M elements and 12.3M
+attributes, an element every 41 bytes. Speed per byte depends on that density, so compare files
+of the same shape. Every parser reads the file first and times the parse alone; the peak is the
+whole process, the file included. A range is the spread of separate sets of runs.
+
+| parser | builds | parse | peak memory |
+|---|---|---|---|
+| **flatxml** | a read-only tree, attributes indexed | 1.11–1.16 s | 1.1 GB (500 MB of it the mapped file) |
+| quick-xml 0.42.0 | nothing: every event and attribute visited | 1.07–1.09 s | 0.5 GB (the file read into memory) |
+| pugixml 1.16 | a mutable tree, in place | 1.32–1.65 s | 2.3 GB |
+| lxml 5.3.1 (libxml2 2.12.9) | a libxml2 tree | 7.1–9.0 s | 7.1 GB |
+| ElementTree (Python 3.12) | a tree of Python objects | 12.3–13.5 s | 5.7 GB |
 
 Resolving namespaces on the same document takes about 105 ms more, roughly a tenth of the parse.
-Validating it against `testdata/inventory.xsd` (namespaces included, values and order not yet
-checked) takes about 0.34 s.
+
+**Validating a large document** against `testdata/inventory.xsd`, start to finish (parse,
+namespaces, validation). flatxml does not yet check values or the order of children, which lxml
+and xmlschema do (steps 4 and 5 of the plan).
+
+| validator | 8 MB | 500 MB |
+|---|---|---|
+| **flatxml** | 0.03 s, 30 MB | 1.5 s, 1.2 GB (validation itself 0.34 s) |
+| lxml | 0.26 s, 142 MB | 16.8 s, 7.5 GB (parse 8.3 s, validation 2.9 s) |
+| xmlschema 4.3.2 | 3.6 s, 152 MB | not run |
+
+**The W3C XML Schema test suite**: thousands of small files, each compiled or validated once. The
+fair rows are the ones in flatxml's subset (the schemas it does not refuse, and the documents of
+those schemas): the same work for every engine. flatxml runs as two batch processes; the others
+run in-process. "Right" counts verdicts that match the suite's expected ones.
+
+| engine | tests | schemas: time | right | documents: time | right |
+|---|---|---|---|---|---|
+| **flatxml** | in the subset | 0.12 s | 4,327 of 5,072 | 0.27 s | 3,762 of 6,443 |
+| lxml | in the subset | 0.11 s | 5,006 of 5,072 | 0.16 s | 6,410 of 6,457 |
+| xmlschema | in the subset | 15.3 s | 5,066 of 5,072 | 3.0 s | 6,424 of 6,460 |
+| lxml | all XSD 1.0 tests | 1.07 s | 13,913 of 14,367 | 1.28 s | 24,721 of 24,832 |
+| xmlschema | all XSD 1.0 tests | 36.9 s | 14,346 of 14,367 | 21.6 s | 24,864 of 24,946 |
+
+On files this small, a fixed cost per file dominates: per schema both flatxml and lxml take about
+23 µs, per document flatxml takes about 42 µs and lxml 25. Its verdicts are right less
+often until steps 4 and 5: 744 invalid schemas compile because their error is in a pattern or
+an enumeration value, and 2,678 invalid documents pass because their error is in a value or the
+order of children.
+
+Reproduce with `tools/compare/run.sh <file>` (fetches and builds quick-xml and pugixml at pinned
+versions), `tools/bench.sh 500` (ElementTree and lxml), and
+`unshare -rn tools/xsts_bench.py bin/flatxml <suite>`. The suite comparison must run without a
+network: some tests import schemas by URL, and libxml2 fetches them, so where a connection hangs
+(it does under WSL) its time becomes the network's. Measured with the network up, lxml took 121 s
+on the schema tests instead of 1.07 s.
 
 ## Limitations
 
@@ -161,6 +224,7 @@ tools/check_vs_expat.py bin/flatxml testdata   # identical to expat, element for
 tools/check_vs_expat.py --ns bin/flatxml testdata            # ... with namespaces resolved
 tools/fuzz_vs_expat.py --ns --count 4000 bin/flatxml testdata/*.xml   # random edits
 tools/bench.sh 500                             # against ElementTree and lxml
+tools/compare/run.sh /tmp/flatxml_bench/gen_500.xml       # against quick-xml and pugixml
 bin/flatxml schema model.xsd                   # compile a schema, print what it holds
 bin/flatxml validate model.xsd model.xml       # check a document against it
 scripts/fetch_xsts.sh /tmp/xsts && tools/xsts.py bin/flatxml /tmp/xsts   # W3C schema tests
