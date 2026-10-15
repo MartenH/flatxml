@@ -144,7 +144,7 @@ fn test_comment_edge_cases() {
 fn test_names_are_interned_once() {
 	d := must('<r><x/><x/><y x="1"/></r>')
 	assert d.tag[2] == d.tag[3]
-	assert d.names.len == 2 + 3 // #text, #document, r, x, y
+	assert d.tab.len() == 2 + 3 // #text, #document, r, x, y
 	assert d.attr_tag[0] == d.tag[2] // the attribute x and the element x share an id
 	assert id_of(d, 'y') == d.tag[4]
 	assert id_of(d, 'z') == 0
@@ -157,7 +157,7 @@ fn test_many_names_grow_the_table() {
 	}
 	s += '</r>'
 	d := must(s)
-	assert d.names.len == 2 + 1 + 3000
+	assert d.tab.len() == 2 + 1 + 3000
 	for k in 0 .. 3000 {
 		assert d.name(u32(2 + k)) == 'n${k}'
 		assert id_of(d, 'n${k}') == d.tag[2 + k]

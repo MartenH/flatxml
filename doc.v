@@ -18,7 +18,7 @@
 // An element whose only content is text keeps that text on the element itself; text nodes
 // exist only for mixed content (text beside child elements). Whitespace-only text between
 // tags is dropped, except inside CDATA. Comments, processing instructions and the DOCTYPE
-// are skipped. Names are interned to u32 ids per Doc.
+// are skipped. Names are interned to u32 ids, in a table a set of documents can share.
 module flatxml
 
 // Reserved name ids. Element names are interned from 2 up.
@@ -45,24 +45,17 @@ pub mut:
 	attr_tag []u32
 	attr_off []u32 // span of the raw value, between the quotes
 	attr_len []u32
-	// Interned names: id -> name.
-	names []string
 	// Namespaces, filled by `resolve_namespaces`: each node's namespace id (0 for a text node and
-	// for an element in no namespace), each attribute's, and the URI of each id.
+	// for an element in no namespace) and each attribute's. The URIs are in the name table.
 	ns      []u32
 	attr_ns []u32
-	ns_uris []string
+	// The interned names (shared by the documents of a set) and namespace URIs.
+	tab &Names = unsafe { nil }
 mut:
-	name_hash  []u64 // id -> hash of the name
-	name_slots []u32 // open-addressing table of ids; 0 marks an empty slot
+	own_tab    bool // the table is this document's alone, and free() releases it
 	mapped     bool
 	keep_bytes []u8   // owns the source when it came from parse_bytes
 	keep_str   string // ... or from parse_string
-	// Filled by `resolve_namespaces`: name id -> prefix name id (0 when none, `not_qname` when the
-	// name is not a qualified name) and local-name id, and URI -> namespace id.
-	name_prefix []u32
-	name_local  []u32
-	ns_ids      map[string]u32
 }
 
 // parse_file maps the file at path and parses it.
@@ -130,14 +123,11 @@ pub fn (mut d Doc) free() {
 		d.attr_tag.free()
 		d.attr_off.free()
 		d.attr_len.free()
-		d.name_hash.free()
-		d.name_slots.free()
 		d.ns.free()
 		d.attr_ns.free()
-		d.name_prefix.free()
-		d.name_local.free()
-		d.ns_uris.free()
-		d.ns_ids.free()
+	}
+	if d.own_tab {
+		d.tab.free()
 	}
 }
 
@@ -168,7 +158,7 @@ pub fn (d &Doc) is_text(i u32) bool {
 // name is the element's name; '#text' for a text node, '#document' for node 0.
 @[inline]
 pub fn (d &Doc) name(i u32) string {
-	return d.names[d.tag[i]]
+	return d.tab.names[d.tag[i]]
 }
 
 @[inline]
@@ -290,7 +280,7 @@ pub fn (d &Doc) attr_range(i u32) (u32, u32) {
 
 @[inline]
 pub fn (d &Doc) attr_name(a u32) string {
-	return d.names[d.attr_tag[a]]
+	return d.tab.names[d.attr_tag[a]]
 }
 
 // attr_raw is the attribute's value as the source has it, between the quotes. Zero-copy.

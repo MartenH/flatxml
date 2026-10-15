@@ -297,7 +297,7 @@ fn print_stats(path string, parse_only bool) ! {
 	texts := d.text_node_count()
 	println('${path}')
 	println('  ${mb(d.src_len)}, parsed in ${ms(took)} ${rate(d.src_len, took)}')
-	println('  ${d.len() - 1 - texts} elements, ${texts} text nodes, ${d.attr_tag.len} attributes, ${d.names.len - 2} distinct names')
+	println('  ${d.len() - 1 - texts} elements, ${texts} text nodes, ${d.attr_tag.len} attributes, ${d.tab.len() - 2} distinct names')
 	println('  node arrays ${mb(used)} used, ${mb(reserved)} reserved')
 	if parse_only {
 		d.free()

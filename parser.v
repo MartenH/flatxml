@@ -72,7 +72,10 @@ fn (mut d Doc) push_node(tag u32, parent u32, off u32) u32 {
 fn (mut d Doc) parse() ! {
 	s := d.src
 	n := d.src_len
-	d.init_names()
+	if isnil(d.tab) {
+		d.tab = Names.new()
+		d.own_tab = true
+	}
 	d.reserve()
 	d.push_node(doc_tag, 0, 0)
 	mut i := 0
@@ -101,7 +104,7 @@ fn (mut d Doc) parse() ! {
 			if cur == 0 {
 				return d.err_at(j, 'end tag </${d.name_at(i + 1)}> without a start tag')
 			}
-			open := d.names[d.tag[cur]]
+			open := d.tab.names[d.tag[cur]]
 			i++
 			if i + open.len > n || unsafe { C.memcmp(s + i, open.str, open.len) } != 0
 				|| (i + open.len < n && !name_end[unsafe { s[i + open.len] }]) {
@@ -135,7 +138,7 @@ fn (mut d Doc) parse() ! {
 			if i >= n {
 				return d.err_at(j, 'start tag is not closed')
 			}
-			id := d.intern(unsafe { s + name_start }, i - name_start)
+			id := d.tab.intern(unsafe { s + name_start }, i - name_start)
 			d.demote_text(cur)
 			node := d.push_node(id, cur, u32(j))
 			if cur == 0 {
@@ -158,13 +161,13 @@ fn (mut d Doc) parse() ! {
 					return d.err_at(i, 'expected `>` after `/`')
 				}
 				if !is_ws(a) {
-					return d.err_at(i, 'expected whitespace, `>` or `/>` in <${d.names[id]}>')
+					return d.err_at(i, 'expected whitespace, `>` or `/>` in <${d.tab.names[id]}>')
 				}
 				for i < n && is_ws(unsafe { s[i] }) {
 					i++
 				}
 				if i >= n {
-					return d.err_at(j, 'start tag <${d.names[id]}> is not closed')
+					return d.err_at(j, 'start tag <${d.tab.names[id]}> is not closed')
 				}
 				b := unsafe { s[i] }
 				if b == `>` || b == `/` {
@@ -175,35 +178,35 @@ fn (mut d Doc) parse() ! {
 					i++
 				}
 				if i == an {
-					return d.err_at(i, 'expected an attribute name in <${d.names[id]}>')
+					return d.err_at(i, 'expected an attribute name in <${d.tab.names[id]}>')
 				}
-				aid := d.intern(unsafe { s + an }, i - an)
+				aid := d.tab.intern(unsafe { s + an }, i - an)
 				for i < n && is_ws(unsafe { s[i] }) {
 					i++
 				}
 				if i >= n || unsafe { s[i] } != `=` {
-					return d.err_at(an, 'expected `=` after attribute ${d.names[aid]}')
+					return d.err_at(an, 'expected `=` after attribute ${d.tab.names[aid]}')
 				}
 				i++
 				for i < n && is_ws(unsafe { s[i] }) {
 					i++
 				}
 				if i >= n {
-					return d.err_at(an, 'attribute ${d.names[aid]} has no value')
+					return d.err_at(an, 'attribute ${d.tab.names[aid]} has no value')
 				}
 				q := unsafe { s[i] }
 				if q != `"` && q != `'` {
-					return d.err_at(i, 'expected a quoted value for attribute ${d.names[aid]}')
+					return d.err_at(i, 'expected a quoted value for attribute ${d.tab.names[aid]}')
 				}
 				i++
 				ve := find_byte(s, i, n, q)
 				if ve < 0 {
-					return d.err_at(an, 'value of attribute ${d.names[aid]} is not closed')
+					return d.err_at(an, 'value of attribute ${d.tab.names[aid]} is not closed')
 				}
 				if ve > i {
 					lt := find_byte(s, i, ve, `<`)
 					if lt >= 0 {
-						return d.err_at(lt, '`<` in the value of attribute ${d.names[aid]}')
+						return d.err_at(lt, '`<` in the value of attribute ${d.tab.names[aid]}')
 					}
 					if find_byte(s, i, ve, `&`) >= 0 {
 						d.check_refs(i, ve)!
@@ -214,13 +217,13 @@ fn (mut d Doc) parse() ! {
 				d.attr_len << u32(ve - i)
 				i = ve + 1
 				if i >= n {
-					return d.err_at(j, 'start tag <${d.names[id]}> is not closed')
+					return d.err_at(j, 'start tag <${d.tab.names[id]}> is not closed')
 				}
 			}
 		}
 	}
 	if cur != 0 {
-		return d.err_at(int(d.src_off[cur]), 'element <${d.names[d.tag[cur]]}> is not closed')
+		return d.err_at(int(d.src_off[cur]), 'element <${d.tab.names[d.tag[cur]]}> is not closed')
 	}
 	if !seen_root {
 		return d.err_at(n, 'no root element')
