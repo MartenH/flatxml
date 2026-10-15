@@ -6,12 +6,14 @@
 //                                  parse time, and (unless --parse-only) the time namespace
 //                                  resolution adds
 //   flatxml schema <xsd>...        compile an XML Schema and print what it holds
-//   flatxml schema --batch         compile one schema per stdin line (tab-separated documents),
-//                                  answering `ok` or `error<TAB>message` per line
+//   flatxml schema --batch [--times]   compile one schema per stdin line (tab-separated
+//                                  documents), answering `ok` or `error<TAB>message` per line;
+//                                  --times writes the time spent compiling to stderr
 //   flatxml validate <xsd> <doc>...   check documents against a schema, one line per finding
-//   flatxml validate --batch       one `document<TAB>schema documents...` per stdin line,
+//   flatxml validate --batch [--times]   one `document<TAB>schema documents...` per stdin line,
 //                                  answering `valid`, `invalid<TAB>kind<TAB>first finding`, or
-//                                  `error<TAB>message`
+//                                  `error<TAB>message`; --times writes the time spent on the
+//                                  documents (not their schemas) to stderr
 module main
 
 import flatxml
@@ -46,7 +48,7 @@ fn main() {
 		}
 		'schema' {
 			if args[1] == '--batch' {
-				schema_batch()
+				schema_batch(args.len > 2 && args[2] == '--times')
 				return
 			}
 			print_schema(args[1..]) or {
@@ -56,7 +58,7 @@ fn main() {
 		}
 		'validate' {
 			if args[1] == '--batch' {
-				validate_batch()
+				validate_batch(args.len > 2 && args[2] == '--times')
 				return
 			}
 			if args.len < 3 {
@@ -88,22 +90,26 @@ fn main() {
 }
 
 // schema_batch compiles one schema per line of stdin, for test runners that would otherwise
-// start a process per schema.
-fn schema_batch() {
+// start a process per schema. With times, the time spent compiling (and nothing else: not
+// reading stdin, not answering) is written to stderr at the end, as `time <microseconds>`.
+fn schema_batch(times bool) {
 	mut out := os.stdout()
+	mut spent := time.Duration(0)
 	for {
 		line := os.get_raw_line()
 		if line == '' {
 			break
 		}
 		paths := line.trim_right('\r\n').split('\t')
-		answer := if _ := xsd.load(...paths) {
-			'ok\n'
-		} else {
-			'error\t${err.msg().replace('\n', ' ')}\n'
-		}
+		sw := time.new_stopwatch()
+		mut answer := 'ok\n'
+		xsd.load(...paths) or { answer = 'error\t${err.msg().replace('\n', ' ')}\n' }
+		spent += sw.elapsed()
 		write_or_exit(mut out, answer)
 		out.flush()
+	}
+	if times {
+		eprintln('time ${spent.microseconds()}')
 	}
 }
 
@@ -148,10 +154,13 @@ fn validate_files(schema string, docs []string) bool {
 }
 
 // validate_batch checks one document per stdin line against the schema documents after it,
-// keeping each compiled schema for the lines that name it again.
-fn validate_batch() {
+// keeping each compiled schema for the lines that name it again. With times, the time spent
+// reading and validating documents (not compiling their schemas) is written to stderr at the
+// end, as `time <microseconds>`.
+fn validate_batch(times bool) {
 	mut out := os.stdout()
 	mut schemas := map[string]&xsd.Schema{}
+	mut spent := time.Duration(0)
 	for {
 		line := os.get_raw_line()
 		if line == '' {
@@ -172,9 +181,14 @@ fn validate_batch() {
 			}
 		}
 		s := schemas[key] or { continue }
+		sw := time.new_stopwatch()
 		answer := check_one(fields[0], s)
+		spent += sw.elapsed()
 		write_or_exit(mut out, answer + '\n')
 		out.flush()
+	}
+	if times {
+		eprintln('time ${spent.microseconds()}')
 	}
 }
 

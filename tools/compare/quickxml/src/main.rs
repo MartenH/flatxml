@@ -6,13 +6,13 @@ fn main() {
     let path = std::env::args().nth(1).expect("usage: qx <file>");
     let data = std::fs::read(&path).unwrap();
     let t = Instant::now();
+    // borrowed events from the slice: no copy of the input
     let mut r = Reader::from_reader(&data[..]);
     r.config_mut().check_end_names = true;
     let (mut elems, mut attrs, mut texts) = (0u64, 0u64, 0u64);
-    let mut buf = Vec::new();
     // every event, and every attribute of every start tag (checked for duplicates and syntax)
     loop {
-        match r.read_event_into(&mut buf) {
+        match r.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
                 elems += 1;
                 for a in e.attributes() {
@@ -25,7 +25,6 @@ fn main() {
             Err(e) => panic!("{e}"),
             _ => {}
         }
-        buf.clear();
     }
     let s = t.elapsed().as_secs_f64();
     println!("quick-xml: {:.1} ms, {:.0} MB/s, {} elements, {} attributes, {} text events",
