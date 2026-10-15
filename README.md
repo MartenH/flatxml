@@ -148,7 +148,8 @@ written on its own (`outer_xml`) carries the namespace declarations in scope whe
 merged view is written as one document the same way (`Merged.write`, `flatxml merge -o OUT`): a
 node from one file with nothing merged into it below is copied whole, and any other is written
 from its first contribution with its merged children, each after the indentation and comments
-that stood before it.
+that stood before it. A set of one document writes its file byte for byte unless the rules
+reorder its children.
 
 ```v
 import flatxml

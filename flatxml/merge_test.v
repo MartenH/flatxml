@@ -1061,3 +1061,49 @@ fn test_a_split_document_merged_and_written_is_the_document() {
 		same_tree(m.root(), written.root_node()) or { panic('round ${round}: ${err}') }
 	}
 }
+
+fn test_a_merged_view_written_review_cases() {
+	// a declaration from another contribution is not copied: the prefix is bound once
+	a := set_of({
+		'a.xml': '<r xmlns:p="urn:a"><g k="1" p:x="1"/></r>'
+		'b.xml': '<r xmlns:p="urn:b"><g k="1" xmlns:p="urn:c" p:y="2"/></r>'
+	})
+	out := a.merge(parse_rules('r g key=@k merge')!)!.xml()
+	mut d := parse_string(out)!
+	d.resolve_namespaces()!
+	g := d.node(d.root()).first()
+	mut got := map[string]string{}
+	lo, hi := d.attr_range(g.i)
+	for x := lo; x < hi; x++ {
+		if !d.is_ns_decl(x) {
+			got['{${d.ns_uri(d.attr_ns_of(x))}}${d.attr_local_name(x)}'] = d.attr_value(x)
+		}
+	}
+	assert got == {
+		'{}k':      '1'
+		'{urn:a}x': '1'
+		'{urn:c}y': '2'
+	}, out
+	// text stays beside the element it followed, whatever the order of the view
+	b := set_of({
+		'a.xml': '<r><p>x<a k="2"/>y<a k="1"/>z</p></r>'
+	})
+	assert b.merge(parse_rules('p a key=@k')!)!.xml() == '<r><p>x<a k="1"/>z<a k="2"/>y</p></r>'
+	// and so do the comments between an element and its text
+	c := set_of({
+		'a.xml': '<r><p><a/><!--c1-->text<b/></p></r>'
+	})
+	assert c.merge(parse_rules('r p single')!)!.xml() == '<r><p><a/><!--c1-->text<b/></p></r>'
+	// the `xml` prefix is bound everywhere: never declared again
+	x := set_of({
+		'a.xml': '<r><g k="1"/></r>'
+		'b.xml': '<r xmlns:xml="http://www.w3.org/XML/1998/namespace"><g k="2" xml:lang="en"/></r>'
+	})
+	assert x.merge(parse_rules('r g key=@k merge')!)!.xml() == '<r><g k="1"/><g k="2" xml:lang="en"/></r>'
+	// a self-closed first contribution takes its end tag's indentation from another
+	e := set_of({
+		'a.xml': '<r>\n  <g k="1"/>\n</r>'
+		'b.xml': '<r>\n  <g k="1">\n    <c/>\n  </g>\n</r>'
+	})
+	assert e.merge(parse_rules('r g key=@k merge')!)!.xml() == '<r>\n  <g k="1">\n    <c/>\n  </g>\n</r>'
+}

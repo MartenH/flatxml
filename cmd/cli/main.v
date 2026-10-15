@@ -36,7 +36,8 @@
 //                                  (`flatxml.parse_rules`): the merged view's size, its time,
 //                                  and what the rules forbid (the first N, default 10);
 //                                  --lookups times finding every node again; -o OUT (--out)
-//                                  writes the merged view to OUT as one document
+//                                  writes the merged view to OUT as one document (`-`: stdout,
+//                                  in place of the report)
 //   flatxml schema <xsd>...        compile an XML Schema and print what it holds
 //   flatxml schema --batch [--times]   compile one schema per stdin line (tab-separated
 //                                  documents), answering `ok` or `error<TAB>message` per line;
@@ -812,6 +813,14 @@ fn merge_set(args []string) {
 		eprintln('${a.rules}: ${err}')
 		exit(1)
 	}
+	// the report goes to stderr where the document goes to stdout
+	say := fn [a] (line string) {
+		if a.out == '-' {
+			eprintln(line)
+		} else {
+			println(line)
+		}
+	}
 	sw := time.new_stopwatch()
 	mut s := flatxml.DocSet.new()
 	errs := s.load(a.files(), jobs: a.jobs, namespaces: a.ns)
@@ -825,31 +834,37 @@ fn merge_set(args []string) {
 	for d in s.docs {
 		nodes += d.len() - 1 - d.text_node_count()
 	}
-	println('${s.docs.len} files, ${nodes} elements, read in ${ms(read)}')
-	println('merged in ${ms(merged)}: ${m.len()} nodes from ${m.fragment_total()} contributions, ${m.problems.len} problems')
+	say('${s.docs.len} files, ${nodes} elements, read in ${ms(read)}')
+	say('merged in ${ms(merged)}: ${m.len()} nodes from ${m.fragment_total()} contributions, ${m.problems.len} problems')
 	mut by_kind := map[string]int{}
 	for p in m.problems {
 		by_kind['${p.kind}']++
 	}
 	for kind, n in by_kind {
-		println('  ${kind}: ${n}')
+		say('  ${kind}: ${n}')
 	}
 	for p in m.problems#[..a.problems] {
-		println('  ${one_line(m.describe(p))}')
+		say('  ${one_line(m.describe(p))}')
 	}
 	if a.lookups {
 		time_lookups(m)
 	}
-	if a.out != '' {
+	if a.out == '-' {
+		mut out := os.stdout()
+		m.write(mut out) or {
+			eprintln('flatxml merge: ${err}')
+			exit(1)
+		}
+	} else if a.out != '' {
 		ws := time.new_stopwatch()
 		m.write_file(a.out) or {
 			eprintln('flatxml merge: ${a.out}: ${err}')
 			exit(1)
 		}
-		println('written to ${a.out} in ${ms(ws.elapsed())}: ${mb(os.file_size(a.out))}')
+		say('written to ${a.out} in ${ms(ws.elapsed())}: ${mb(os.file_size(a.out))}')
 	}
 	for e in errs {
-		println('  failed: ${one_line(e.msg)}')
+		say('  failed: ${one_line(e.msg)}')
 	}
 	if errs.len > 0 || m.problems.len > 0 {
 		exit(1)

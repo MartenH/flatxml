@@ -271,7 +271,8 @@ fn scope_decls(src map[string]string, dst map[string]string, own map[string]stri
 	prefixes.sort()
 	mut out := []string{}
 	for p in prefixes {
-		if p in own {
+		// `xml` is bound everywhere, and declaring it again changes nothing
+		if p in own || p == 'xml' {
 			continue
 		}
 		have := src[p] or { '' }
@@ -286,4 +287,38 @@ fn scope_decls(src map[string]string, dst map[string]string, own map[string]stri
 		}
 	}
 	return out
+}
+
+// bindings_above are the namespace bindings the elements above element i declare, in scope at i
+// but for the prefixes i declares itself: prefix ('' for the default) -> URI.
+fn (d &Doc) bindings_above(i u32) map[string]string {
+	mut out := map[string]string{}
+	for x in d.inherited_ns_decls(i) {
+		out[decl_prefix(d.attr_name(x))] = d.attr_value(x)
+	}
+	return out
+}
+
+// own_bindings are the namespace declarations element i makes: prefix ('' for the default) ->
+// URI.
+fn (d &Doc) own_bindings(i u32) map[string]string {
+	mut out := map[string]string{}
+	lo, hi := d.attr_range(i)
+	for a := lo; a < hi; a++ {
+		if is_ns_decl_name(d.attr_name(a)) {
+			out[decl_prefix(d.attr_name(a))] = d.attr_value(a)
+		}
+	}
+	return out
+}
+
+// declares reports whether element i declares a namespace.
+fn (d &Doc) declares(i u32) bool {
+	lo, hi := d.attr_range(i)
+	for a := lo; a < hi; a++ {
+		if is_ns_decl_name(d.attr_name(a)) {
+			return true
+		}
+	}
+	return false
 }

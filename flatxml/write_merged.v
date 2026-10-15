@@ -6,11 +6,13 @@ import io
 // contribution whose children are its contribution's own, unchanged all the way down, is copied
 // byte for byte. Any other node is written from its first contribution: its start tag as written
 // there, with the attributes only other contributions have after its own (first wins, as the
-// view reads them); its text; and its merged children in the view's order, each after the bytes
-// that stood before it where it was read (its indentation, and the comments before it), then the
-// bytes before its first contribution's end tag. The bytes before and after the root are the
-// first contribution's document's. An element read where other namespace bindings were in scope
-// than where it is written is given the declarations that restore them, as an edit's is.
+// view reads them); its merged children in the view's order, each after the bytes that stood
+// before it where it was read (its indentation, and the comments before it); the text, comments
+// and processing instructions that followed each of the first contribution's own children, after
+// that child; and the bytes before the end tag. The bytes before and after the root are its first
+// contribution's document's. An element read where other namespace bindings were in scope than
+// where it is written is given the declarations that restore them, as an edit's is; namespace
+// declarations are never taken from other contributions as attributes.
 
 // write writes the merged view as one XML document to w.
 pub fn (m &Merged) write(mut w io.Writer) ! {
@@ -51,7 +53,7 @@ fn (m &Merged) emit(mut em Emitter) ! {
 		m:    m
 		pure: m.pure_nodes()
 	}
-	w.element(mut em, root.i, map[string]string{})!
+	w.element(mut em, root.i, hi, map[string]string{})!
 	em.copy_in(f.doc, hi, u32(f.doc.src_len))!
 }
 
@@ -86,201 +88,298 @@ fn (m &Merged) pure_nodes() []bool {
 	return pure
 }
 
+@[heap]
 struct MergedWriter {
 	m    &Merged
 	pure []bool
+mut:
+	// the bindings in scope inside an element of a document, by (document, element)
+	inside map[u64]map[string]string
 }
 
-// element writes merged node n where the bindings scope are in scope.
-fn (w &MergedWriter) element(mut em Emitter, n u32, scope map[string]string) ! {
+// bindings_in is the namespace bindings in scope inside element i of document doc: those above
+// it and its own, worked out once per element.
+fn (mut w MergedWriter) bindings_in(doc u32, i u32) map[string]string {
+	key := u64(doc) << 32 | u64(i)
+	if b := w.inside[key] {
+		return b
+	}
+	d := w.m.set.docs[doc]
+	p := d.parent[i]
+	above := if p == 0 { map[string]string{} } else { w.bindings_in(doc, p) }
+	if !d.declares(i) {
+		// the same bindings as above it: the same map
+		w.inside[key] = above
+		return above
+	}
+	mut b := above.clone()
+	for pre, u in d.own_bindings(i) {
+		b[pre] = u
+	}
+	w.inside[key] = b
+	return b
+}
+
+// bindings_above is the namespace bindings in scope where element i of document doc is.
+fn (mut w MergedWriter) bindings_above(doc u32, i u32) map[string]string {
+	p := w.m.set.docs[doc].parent[i]
+	return if p == 0 { map[string]string{} } else { w.bindings_in(doc, p) }
+}
+
+// Layout is where the children of one contribution are: per child element, where the bytes
+// before it start (lead), where it ends, and where the text and comments after it end (tail);
+// where the first child element's bytes start, and where the last child node ends.
+struct Layout {
+mut:
+	elems       []u32 // in document order
+	lead        []u32
+	ends        []u32
+	tail        []u32
+	first_lead  u32
+	content_end u32
+}
+
+// entry is the entry of child element c; -1 for none.
+fn (l &Layout) entry(c u32) int {
+	mut lo, mut hi := 0, l.elems.len
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if l.elems[mid] < c {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return if lo < l.elems.len && l.elems[lo] == c { lo } else { -1 }
+}
+
+fn layout_of(d &Doc, i u32, ste u32) Layout {
+	mut l := Layout{
+		first_lead:  ste
+		content_end: ste
+	}
+	mut prev_end := ste
+	mut c := d.first_child(i)
+	for c != no_node {
+		end := d.span_end(c)
+		if d.is_element(c) {
+			if l.elems.len == 0 {
+				l.first_lead = prev_end
+			} else {
+				l.tail[l.tail.len - 1] = prev_end
+			}
+			l.elems << c
+			l.lead << prev_end
+			l.ends << end
+			l.tail << end
+		}
+		prev_end = end
+		c = d.next_sibling(c)
+	}
+	if l.elems.len > 0 {
+		l.tail[l.tail.len - 1] = prev_end
+		l.content_end = prev_end
+	} else {
+		l.content_end = if d.text_len[i] != 0 { d.text_end(i) } else { prev_end }
+		l.first_lead = l.content_end
+	}
+	return l
+}
+
+// element writes merged node n, which ends at end in its first contribution's document, where
+// the bindings scope are in scope.
+fn (mut w MergedWriter) element(mut em Emitter, n u32, end u32, scope map[string]string) ! {
 	m := w.m
-	f := m.frag_node(m.frags[m.frag_lo[n]])
-	d := f.doc
-	i := f.i
-	after_name := d.src_off[i] + 1 + u32(d.name(i).len)
-	own := own_decls_of(d, i)
-	src := source_bindings(d, i)
-	decls := scope_decls(src, scope, own)
+	f0 := m.frags[m.frag_lo[n]]
+	d := m.set.docs[f0.doc]
+	i := f0.i
+	own := if d.declares(i) { d.own_bindings(i) } else { map[string]string{} }
+	mut decls := scope_decls(w.bindings_above(f0.doc, i), scope, own)
 	if w.pure[n] {
-		a, b := d.span(i)
-		em.copy_in(d, a, after_name)!
+		after_name := d.src_off[i] + 1 + u32(d.name(i).len)
+		em.copy_in(d, d.src_off[i], after_name)!
 		if decls.len > 0 {
 			em.put(decls.join(''))!
 		}
-		em.copy_in(d, after_name, b)!
+		em.copy_in(d, after_name, end)!
 		return
 	}
-	// the start tag: its first contribution's, then what only the others have
-	em.copy_in(d, d.src_off[i], after_name)!
-	if decls.len > 0 {
-		em.put(decls.join(''))!
-	}
-	lo, hi := d.attr_range(i)
-	attrs_end := if hi > lo { d.attr_off[hi - 1] + d.attr_len[hi - 1] + 1 } else { after_name }
-	em.copy_in(d, after_name, attrs_end)!
-	// in scope inside it: what was where it was read (which decls restore), and its own
-	mut inner := scope.clone()
-	if '' !in src {
-		inner.delete('')
-	}
-	for p, u in src {
-		inner[p] = u
-	}
-	for p, u in own {
-		inner[p] = u
-	}
-	mut have := map[u32]bool{}
-	for a := lo; a < hi; a++ {
-		have[d.attr_tag[a]] = true
-	}
-	for a in MNode{m, n}.attrs() {
-		if a.tag in have {
-			continue
-		}
-		name := m.set.tab.name(a.tag)
-		q := attr_quote(a.value, `"`)
-		em.put(' ${name}=${q.ascii_str()}${escape_attr(a.value, q)}${q.ascii_str()}')!
-		if is_ns_decl_name(name) && decl_prefix(name) !in own {
-			inner[decl_prefix(name)] = a.value
-		}
-	}
+	// in scope inside it: where it was read, and what its attributes from others declare
+	mut inner := w.bindings_in(f0.doc, i)
+	extras := w.extra_attrs(n, d, i, mut inner, mut decls)
 	ste := d.start_tag_end(i)
 	closed := d.self_closing(ste)
-	kids := m.kid_lo[n + 1] - m.kid_lo[n]
-	if closed && kids == 0 {
-		em.copy_in(d, attrs_end, ste)!
+	nkids := m.kid_lo[n + 1] - m.kid_lo[n]
+	if closed && nkids == 0 {
+		em.start_tag(d, i, extras, decls, ste, true)!
 		return
 	}
-	if closed {
-		em.copy_in(d, attrs_end, ste - 2)!
-		em.put('>')!
-	} else {
-		em.copy_in(d, attrs_end, ste)!
-	}
-	w.content(mut em, n, d, i, ste, closed, inner)!
+	em.start_tag(d, i, extras, decls, ste, false)!
+	ets := w.content(mut em, n, d, i, ste, closed, inner)!
 	if closed {
 		em.put('</${d.name(i)}>')!
 	} else {
-		ets := d.end_tag_at(d.content_end(i, ste))
 		em.copy_in(d, ets, d.close_after(i, ets))!
 	}
 }
 
-// content writes the content of merged node n, whose first contribution is element i of d: its
-// text, from that contribution, each run after as many of the merged children as there were
-// child elements before it there; the merged children, each after the bytes before it where it
-// was read; then what stood before the contribution's end tag. Whitespace is not written next to
-// text, where it would join it.
-fn (w &MergedWriter) content(mut em Emitter, n u32, d &Doc, i u32, ste u32, closed bool, scope map[string]string) ! {
+// extra_attrs are the attributes of merged node n that only other contributions than its first
+// (element i of d) have, as attribute changes to its start tag: never a namespace declaration;
+// a prefixed one by a prefix bound to its namespace where it is written, declared (in decls and
+// inner) where none is.
+fn (mut w MergedWriter) extra_attrs(n u32, d &Doc, i u32, mut inner map[string]string, mut decls []string) []AttrChange {
 	m := w.m
-	mut text_last := false
-	// text that is the contribution's only content: with the comments around it, first
-	if d.text_len[i] != 0 {
-		ets := d.end_tag_at(d.text_end(i))
-		em.copy_in(d, ste, ets)!
-		text_last = ets == d.text_end(i)
+	if m.frag_lo[n + 1] - m.frag_lo[n] == 1 {
+		return []
 	}
-	// the contribution's text nodes, by the number of child elements before each
-	mut runs := [][]u32{}
-	mut slot := 0
-	mut c := d.first_child(i)
-	for c != no_node {
-		if d.is_text(c) {
-			for runs.len <= slot {
-				runs << []u32{}
+	mut have := map[string]bool{}
+	mut used := map[string]bool{} // prefixes the element's own names use
+	used[prefix_of(d.name(i))] = true
+	lo, hi := d.attr_range(i)
+	for a := lo; a < hi; a++ {
+		have[d.attr_name(a)] = true
+		used[prefix_of(d.attr_name(a))] = true
+	}
+	mut out := []AttrChange{}
+	for k := m.frag_lo[n] + 1; k < m.frag_lo[n + 1]; k++ {
+		f := m.frags[k]
+		fd := m.set.docs[f.doc]
+		flo, fhi := fd.attr_range(f.i)
+		for a := flo; a < fhi; a++ {
+			name := fd.attr_name(a)
+			if name in have || is_ns_decl_name(name) {
+				continue
 			}
-			runs[slot] << c
-		} else {
-			slot++
+			have[name] = true
+			p := prefix_of(name)
+			if p == '' || p == 'xml' {
+				out << AttrChange{name, fd.attr_value(a)}
+				continue
+			}
+			uri := w.bindings_in(f.doc, f.i)[p] or { '' }
+			if uri == '' {
+				out << AttrChange{name, fd.attr_value(a)}
+				continue
+			}
+			mut q := ''
+			if (inner[p] or { '' }) == uri {
+				q = p
+			} else {
+				for cand, u in inner {
+					if u == uri && cand != '' {
+						q = cand
+						break
+					}
+				}
+			}
+			if q == '' {
+				// declare one: its own prefix, unless that means something else here
+				q = p
+				mut k2 := 1
+				for (q in inner) || (q in used) {
+					q = '${p}${k2}'
+					k2++
+				}
+				decls << ' xmlns:${q}="${escape_attr(uri, `"`)}"'
+				inner = inner.clone() // the cached bindings stay as read
+				inner[q] = uri
+			}
+			out << AttrChange{'${q}:${name.all_after(':')}', fd.attr_value(a)}
 		}
-		c = d.next_sibling(c)
 	}
+	return out
+}
+
+// prefix_of is the prefix of a qualified name; '' for none.
+@[inline]
+fn prefix_of(name string) string {
+	return if name.contains(':') { name.all_before(':') } else { '' }
+}
+
+// content writes the content of merged node n, whose first contribution is element i of d, and
+// returns where that contribution's end tag starts. Whitespace is not written next to text,
+// where it would join it.
+fn (mut w MergedWriter) content(mut em Emitter, n u32, d &Doc, i u32, ste u32, closed bool, scope map[string]string) !u32 {
+	m := w.m
+	// the layout of every contribution's children, where they are needed
+	flo := m.frag_lo[n]
+	mut layouts := []Layout{cap: int(m.frag_lo[n + 1] - flo)}
+	for k := flo; k < m.frag_lo[n + 1]; k++ {
+		f := m.frags[k]
+		fd := m.set.docs[f.doc]
+		layouts << layout_of(fd, f.i, if k == flo { ste } else { fd.start_tag_end(f.i) })
+	}
+	l0 := layouts[0]
+	// what comes before the first contribution's first child element: its text and comments
+	em.copy_in(d, ste, l0.first_lead)!
+	mut text_last := l0.first_lead > ste
+	mut written := []bool{len: l0.elems.len}
 	for k := m.kid_lo[n]; k < m.kid_lo[n + 1]; k++ {
-		idx := int(k - m.kid_lo[n])
-		if idx < runs.len {
-			for t in runs[idx] {
-				a, b := d.span(t)
-				em.copy_in(d, a, b)!
-				text_last = true
+		kf := m.frags[m.frag_lo[k]]
+		kd := m.set.docs[kf.doc]
+		// the contribution it is a child of
+		mut c := 0
+		for c < layouts.len {
+			cf := m.frags[flo + u32(c)]
+			if cf.doc == kf.doc && cf.i == kd.parent[kf.i] {
+				break
 			}
+			c++
 		}
-		kf := m.frag_node(m.frags[m.frag_lo[k]])
-		mut lead := lead_start(kf.doc, kf.i)
-		start := kf.doc.span_start(kf.i)
+		lk := if c < layouts.len { layouts[c] } else { Layout{} }
+		x := lk.entry(kf.i)
+		start := kd.span_start(kf.i)
+		mut lead := if x >= 0 { lk.lead[x] } else { start }
 		if text_last {
-			lead = ws_prefix_end(kf.doc, lead, start)
+			lead = ws_prefix_end(kd, lead, start)
 		}
-		em.copy_in(kf.doc, lead, start)!
-		w.element(mut em, k, scope)!
+		em.copy_in(kd, lead, start)!
+		end := if x >= 0 { lk.ends[x] } else { kd.span_end(kf.i) }
+		w.element(mut em, k, end, scope)!
 		text_last = false
+		// the text after it, where it was the first contribution's own child
+		if x >= 0 && c == 0 {
+			em.copy_in(d, l0.ends[x], l0.tail[x])!
+			text_last = l0.tail[x] > l0.ends[x]
+			written[x] = true
+		}
 	}
-	nkids := int(m.kid_lo[n + 1] - m.kid_lo[n])
-	for k in nkids .. runs.len {
-		for t in runs[k] {
-			a, b := d.span(t)
-			em.copy_in(d, a, b)!
+	// the text after the first contribution's children the view left out
+	for x, done in written {
+		if !done && l0.tail[x] > l0.ends[x] {
+			em.copy_in(d, l0.ends[x], l0.tail[x])!
 			text_last = true
 		}
 	}
-	if closed || d.text_len[i] != 0 {
-		return
-	}
-	// what stood after the contribution's last child, before its end tag
-	mut tail := ste
-	if i + 1 < d.end[i] {
-		tail = d.span_end(d.last_child_of(i))
-	}
-	ets := d.end_tag_at(tail)
-	if text_last {
-		tail = ws_prefix_end(d, tail, ets)
-	}
-	em.copy_in(d, tail, ets)!
-}
-
-// lead_start is where the bytes before node i start: the end of its previous sibling, or of its
-// parent's start tag. A text node before it ends where it starts.
-fn lead_start(d &Doc, i u32) u32 {
-	p := d.parent[i]
-	mut prev := i - 1
-	if prev == p {
-		return if p == 0 { 0 } else { d.start_tag_end(p) }
-	}
-	for d.parent[prev] != p {
-		prev = d.parent[prev]
-	}
-	return d.span_end(prev)
-}
-
-// last_child_of is element i's last child node, text or element; i has one.
-fn (d &Doc) last_child_of(i u32) u32 {
-	mut c := i + 1
-	mut last := c
-	for c < d.end[i] {
-		last = c
-		c = d.end[c]
-	}
-	return last
-}
-
-// source_bindings are the namespace bindings in scope where element i was read, from the
-// declarations of the elements above it.
-fn source_bindings(d &Doc, i u32) map[string]string {
-	mut out := map[string]string{}
-	for x in d.inherited_ns_decls(i) {
-		out[decl_prefix(d.attr_name(x))] = d.attr_value(x)
-	}
-	return out
-}
-
-// own_decls_of are the namespace declarations element i makes: prefix ('' for the default) ->
-// URI.
-fn own_decls_of(d &Doc, i u32) map[string]string {
-	mut out := map[string]string{}
-	lo, hi := d.attr_range(i)
-	for a := lo; a < hi; a++ {
-		if is_ns_decl_name(d.attr_name(a)) {
-			out[decl_prefix(d.attr_name(a))] = d.attr_value(a)
+	// the bytes before the end tag: the first contribution's, or, where it has no end tag, those
+	// of one that has
+	mut td := d
+	mut tl := l0
+	mut tste := ste
+	if closed {
+		for k := m.frag_lo[n] + 1; k < m.frag_lo[n + 1]; k++ {
+			f := m.frags[k]
+			fd := m.set.docs[f.doc]
+			s := fd.start_tag_end(f.i)
+			if !fd.self_closing(s) {
+				td = fd
+				tl = layouts[k - flo]
+				tste = s
+				break
+			}
+		}
+		if voidptr(td) == voidptr(d) {
+			return ste
 		}
 	}
-	return out
+	ets := td.end_tag_at(tl.content_end)
+	mut from := tl.content_end
+	if voidptr(td) != voidptr(d) && tl.elems.len == 0 {
+		from = ws_suffix_start(td, tste, ets)
+	}
+	if text_last {
+		from = ws_prefix_end(td, from, ets)
+	}
+	em.copy_in(td, from, ets)!
+	return ets
 }
