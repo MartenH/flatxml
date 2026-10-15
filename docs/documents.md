@@ -3,7 +3,7 @@
 The first consumers of flatxml read many files at once and work on the whole: compare two
 versions, merge files that each hold part of one model, change a value and write the file back.
 This plan adds that, on the read-only tree: many documents read together, navigation by handle,
-diff, a merged view, edits and writing. It comes before typed values and parse speed (steps 6
+a merged view, diff, edits and writing. It comes before typed values and parse speed (steps 6
 and 7 of [plan.md](plan.md)), which it does not depend on.
 
 Everything here is generic. How elements are identified and which ones merge are rules the caller
@@ -32,27 +32,45 @@ annotations are kept for that), but none is needed.
 2. **Handles and navigation.** A missing node is a valid empty handle, so a chain of lookups needs
    no check at every step; typed reads take a default. Children and descendants are iterated
    without allocating. Paths (`find('a/b')`, `iter('item')`) compile once into name ids.
-3. **Rules.** The caller says, per parent element and child name, how such children are told
-   apart and put together:
-   - the **key**: the texts at one or more paths below the child (`NAME`, `ITEM/ID`), or an
-     attribute, compared as written or ignoring case; or none, so each child is its own;
-   - whether children of one key from different files **merge** into one, or are an error;
-   - whether their **order** means something, so that they must all come from one file;
-   - the most there may be.
+3. **Rules** (built). A `RuleSet` is a list of `Rule`s, one per aggregation: the children named
+   (or any child) of an element named (or any element). A child takes the rule for its parent's
+   name and its own, else its parent's name and any child, else any parent and its own name,
+   else any parent and any child. A rule is one of three kinds:
+   - **keyed**: the key is the texts at one or more paths below the child (`NAME`, `ITEM/ID`,
+     `@id`, `ITEM/@id`), or what a callback returns, where paths cannot say it. With `merge`,
+     children of one key (from any files) are one child; without, the second is a collision.
+     A child missing every part of its key is reported and kept, as a child of its own;
+   - **single**: one child of each name, identified by its name, so the occurrences in every
+     fragment of the parent are one child (with `merge`; without, the second is a collision);
+   - **each**: every occurrence is a child of its own. A child no rule names is of this kind.
 
-   Paths compile once to name ids. An element's identity is the path of keys from the root, the
-   same in every file that holds it. A schema's annotations can be read into rules, by the caller
-   that knows what they mean.
+   A keyed or each rule can be **ordered** (all its children from one file, kept as written)
+   and have a **max**. Keys are compared as written or, for the whole set, ignoring ASCII case,
+   and the set can name attributes whose values may differ. Paths compile once to name ids.
+   An element's identity is the path of keys from the root, the same in every file that holds
+   it: a key is unique in its **scope**, the nearest ancestor that is not single (a keyed or
+   each child, or the root), so a single child (a wrapper) is transparent to keys. The rules'
+   order is the order of their aggregations among a node's children. `parse_rules` reads them
+   from text, one per line (`ITEMS ITEM key=NAME merge`). A schema's annotations can be read
+   into rules, by the caller that knows what they mean.
 4. **Diff.** Two documents (or two sets) are compared top down: children with keys matched by
    key, the rest aligned in order (longest common subsequence over their names and contents). A
    hash per subtree, computed once, skips identical subtrees whole. The result is an edit set:
    added, removed, moved, text and attributes changed, each with both positions.
-5. **Merged view.** Over a set and its rules: a merged node is the list of nodes, from any files,
-   with one identity; its children are their children grouped by the rules, ordered by key (or as
-   written, where order means something). Nothing is copied. What the rules forbid (one key from
-   two files where it may not merge, an ordered list in two files, more than the most, two
-   contributions whose texts or attributes differ) is a problem reported with every position,
-   and decided by the caller (first wins, or an error).
+5. **Merged view** (built). `DocSet.merge(rules)` reads every document of a set as one: the
+   merged root is the documents' roots, and a merged node's children are its fragments'
+   children put together by the rules, then ordered: by aggregation in the rules' order (those
+   no rule names last); within one, by key, or as written (the set's order, then document
+   order) for each and ordered aggregations. A merged node (`MNode`) is a handle like `Node`: its
+   name, key, key path, parent, children, its child by name and key, and its fragments, the
+   `(document, node)` pairs it is made of, which is all it keeps: nothing is copied. Built top
+   down, so a node's children are consecutive and so are its fragments; a child by name and
+   key is a read of up to 16 children or one hash probe, and a node by its key path one probe
+   per key. What the rules forbid is a `Problem` with every node involved, so every file and
+   line: a collision, an ordered aggregation in two files, too many children, two fragments
+   whose text or an attribute differ, one key under two names (or roots named differently), a
+   child without its key. The view keeps the first (in the set's order, then document order);
+   a caller for whom a problem is an error refuses the view when there is one.
 6. **Edits.** An edit set over a document or a merged view: set text, set or remove an attribute,
    insert an element (written as a fragment, or copied from any node), remove one, move one. Kept
    as changes keyed by node, so the tree's arrays are never rewritten, and read through: an
@@ -109,22 +127,30 @@ Round trips, which need no oracle:
    plug in; escaping (text, attribute values with the quote that needs fewer escapes, CDATA) and
    an element written from the tree's parts with the namespace declarations in scope are in
    place for them. `flatxml write` and `flatxml roundtrip` run it from the command line.
-3. **Rules and diff** (design 3, 4), and `flatxml diff`: two files or two directories, the changes
-   with their positions.
-4. **Edits** (design 6), the write of an edited document, and `flatxml apply`: a diff applied to
-   its old document gives the new one.
-5. **Merged view** (design 5) and `flatxml merge`: many files into one, problems listed; edits
-   on a merged view, written back to their own files.
+3. **Rules and the merged view** (design 3, 5, done), and `flatxml merge`: many files read as
+   one, the problems listed with their positions. A document split into one to six files by
+   its keys (200 random documents) merges back to the document, node for node. The 560
+   real-world files (1.78M elements), with a rule per aggregation (116 keyed by the text of a
+   child, 820 single), merge in 0.23–0.33 s on one thread into 1.68M merged nodes; the view
+   adds about 100 MB to the set's 250 MB. 144,467 nodes are found again by their key paths in
+   about 0.4 µs each, and 1.37M children by name and key in about 17 ns each. The rules find
+   540 problems, all values that differ: 534 in two attributes that differ from file to file
+   (one names the schema, one is an identifier), which `ignore` leaves out, and 6 in the text
+   of two copies of one definition.
+4. **Diff** (design 4), and `flatxml diff`: two files or two directories, the changes with their
+   positions.
+5. **Edits** (design 6), the write of an edited document, and `flatxml apply`: a diff applied to
+   its old document gives the new one; edits on a merged view, written back to their own files.
 6. **Three-way merge**: two changed versions of one base.
 
 ## Techniques taken from other tools
 
-- **Subtree hashes** (step 3), as git compares trees and X-Diff compares documents: an unchanged
+- **Subtree hashes** (step 4), as git compares trees and X-Diff compares documents: an unchanged
   subtree is one hash comparison, so diffing two versions costs in proportion to what changed.
-- **Keyed matching, then ordered alignment** (step 3), as XyDiff and DeltaXML match by
+- **Keyed matching, then ordered alignment** (step 4), as XyDiff and DeltaXML match by
   identifying attributes first: keyed elements match exactly, and only the unkeyed rest needs a
   longest-common-subsequence alignment (Myers' algorithm, as `diff` uses).
-- **Changes over an unchanged original** (step 4), as a text editor's piece table keeps the file
+- **Changes over an unchanged original** (step 5), as a text editor's piece table keeps the file
   and a list of edits: no array is rewritten, an edit costs what it changes, and undo is dropping
   one.
 - **Lossless writing** (step 2), as format-preserving editors do: the original bytes are the

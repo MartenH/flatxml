@@ -29,6 +29,34 @@ for d in set.docs {
 }
 ```
 
+A model kept in many files reads as one through a merged view, by rules the caller gives: how
+children are identified (by a key, by their name, or not at all) and whether those of one
+identity from different files are one. Nothing is copied: a merged node is the list of nodes it
+is made of, from any of the files.
+
+```v
+import flatxml
+
+// An item is identified by its name child, and the items of one name in different files are
+// one item; items is a wrapper, and every child of an item is single.
+rules := flatxml.parse_rules('
+model items single merge
+items item key=name merge
+item * single merge
+') or { panic(err) }
+mut set := flatxml.DocSet.new()
+set.load(['part1.xml', 'part2.xml'])
+mut m := set.merge(rules) or { panic(err) }
+for p in m.problems {
+	eprintln(m.describe(p)) // what the rules forbid, with every file and line involved
+}
+pump := m.at_path('/pump') // by its key path, which a wrapper is not part of
+println('${pump.child('price', '').text()}, from ${pump.fragment_count()} files:')
+for f in pump.fragments() {
+	println('  ${f.pos()}')
+}
+```
+
 The library is the `flatxml/` folder (`flatxml`, and `flatxml.xsd` below it); a project vendors
 that folder at a stated commit.
 
@@ -66,6 +94,15 @@ with 491 distinct names among them.
 it gives another, a read gives `''` or the default asked for. Children and descendants iterate
 without allocating (descendants are a scan of the `tag` array), and a path (`a/b`) compiles once
 to name ids.
+
+**Merged views** (`DocSet.merge`) are built top down over a set, one merged node at a time, so
+a node's children are consecutive in its arrays and so are its fragments, the `(document,
+node)` pairs it is made of. A child's rule is looked up once per pair of names. Children are
+grouped by rule, then by key, and ordered by key, or as written where the rule says order
+matters. A key is unique in its scope, the nearest ancestor that is not a single child, so a
+node is also found by its key path: one hash probe per key. 560 real-world files (1.78M
+elements) merge in about 0.3 s on one thread. The rules, and the problems the view reports,
+are in [docs/documents.md](docs/documents.md).
 
 **Namespaces** are resolved on request, by `resolve_namespaces`, in a second linear pass: one
 more array beside the nodes (each element's namespace id) and one beside the attributes. Names
@@ -340,7 +377,7 @@ Linux too):
 export V_MACOS_V3_NO_FALLBACK=1
 v test .                                       # unit tests
 scripts/check_readme_examples.sh               # the README's examples type-check
-mkdir -p bin && v -o bin/flatxml cmd/cli       # flatxml dump | stats | set | write | roundtrip | schema | validate
+mkdir -p bin && v -o bin/flatxml cmd/cli       # flatxml dump | stats | set | write | roundtrip | merge | schema | validate
 v -prod -o bin/genxml cmd/genxml               # genxml <out.xml> <megabytes>
 bin/flatxml roundtrip testdata                 # written back, each file is itself (--nodes, --rewrite)
 tools/check_vs_expat.py bin/flatxml testdata   # identical to expat, element for element
@@ -348,6 +385,7 @@ tools/check_vs_expat.py --ns bin/flatxml testdata            # ... with namespac
 tools/fuzz_vs_expat.py --ns --count 4000 bin/flatxml testdata/*.xml   # random edits
 tools/bench.sh 500                             # against ElementTree and lxml
 tools/compare/run.sh <file>                    # against quick-xml, pugixml, lxml, ElementTree
+bin/flatxml merge --rules rules.txt parts/      # many files read as one by rules: size, time, problems
 bin/flatxml schema model.xsd                   # compile a schema, print what it holds
 bin/flatxml validate model.xsd model.xml       # check a document against it
 tools/patterns_vs_lxml.py bin/flatxml model.xsd   # its patterns against libxml2's, string by string
