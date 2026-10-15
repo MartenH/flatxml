@@ -830,14 +830,58 @@ fn test_one_rule_over_several_names_counts_them_together() {
 
 fn test_a_key_part_can_be_the_own_text() {
 	rs := parse_rules('r item key=.,@k merge') or { panic(err) }
-	assert rs.rules[0].key == ['', '@k']
+	assert rs.rules[0].key == ['.', '@k']
 	s := set_of({
-		'a.xml': '<r><item k="1">x<sub/></item><item k="1">y</item></r>'
-		'b.xml': '<r><item k="1">x<more/></item></r>'
+		'a.xml': '<r><item k="1">x<sub>q</sub></item><item k="1">y</item></r>'
+		'b.xml': '<r>\n  <item k="1">\n    x\n    <more>z</more>\n  </item>\n</r>'
 	})
 	m := s.merge(rs) or { panic(err) }
+	// the own text, not the children's, and not the indentation beside them
 	assert m.root().kids().map(show_key(it.key())) == ['x,1', 'y,1']
 	assert m.root().kids()[0].kids().map(it.name()) == ['sub', 'more']
+	// '' in a Rule is the same part
+	m2 := s.merge(RuleSet{
+		rules: [Rule{
+			parent:   'r'
+			children: ['item']
+			key:      ['', '@k']
+			merge:    true
+		}]
+	}) or { panic(err) }
+	assert m2.root().kids().map(show_key(it.key())) == ['x,1', 'y,1']
+}
+
+fn test_no_own_text_is_an_absent_key_part() {
+	s := set_of({
+		'a.xml': '<r><item/><item></item><item>t</item></r>'
+	})
+	// keyless children are their own, and reported
+	own := s.merge(parse_rules('r item key=.')!)!
+	assert own.root().kids().len == 3
+	assert own.problems.filter(it.kind == .missing_key).len == 2
+	// or the one child with the empty key
+	empty := s.merge(parse_rules('r item key=. keyless=empty merge')!)!
+	assert empty.root().kids().map(show_key(it.key())) == ['t', '']
+	assert empty.problems.len == 0
+}
+
+fn test_the_own_text_is_read_once() {
+	s := set_of({
+		'a.xml': '<r><item/></r>'
+	})
+	for rules in [parse_rules('r item key=.+')!, RuleSet{
+		rules: [Rule{
+			parent:   'r'
+			children: ['item']
+			key:      ['+']
+		}]
+	}] {
+		if _ := s.merge(rules) {
+			assert false
+		} else {
+			assert err.msg().contains('one text') || err.msg().contains('names none'), err.msg()
+		}
+	}
 }
 
 fn random_rule_set(mut seed &u64) RuleSet {
@@ -865,7 +909,7 @@ fn random_rule_set(mut seed &u64) RuleSet {
 		mut key := []string{}
 		if next(2) == 0 {
 			for _ in 0 .. 1 + next(3) {
-				key << pick(['', 'NAME', 'ITEM/ID', '@id', 'ITEM/@id', 'REFS/REF+', 'a/b/c'])
+				key << pick(['.', 'NAME', 'ITEM/ID', '@id', 'ITEM/@id', 'REFS/REF+', 'a/b/c'])
 			}
 		}
 		rules << Rule{
@@ -917,7 +961,11 @@ fn test_rule_sets_are_written_and_read_back() {
 		RuleSet{ rules: [Rule{ parent: '!r', children: ['a'] }] },
 		RuleSet{ rules: [Rule{ parent: 'r', children: ['a,b'] }] },
 		RuleSet{ rules: [Rule{ parent: 'r', children: ['a', ''] }] },
-		RuleSet{ rules: [Rule{ parent: 'r', children: ['a'], key: ['.'] }] },
+		RuleSet{ rules: [Rule{ parent: 'r', children: ['a'], key: ['.+'] }] },
+		RuleSet{ rules: [Rule{ parent: 'r', children: ['a'], key: ['+'] }] },
+		RuleSet{ rules: [Rule{ parent: 'r\vs', children: ['a'] }] },
+		RuleSet{ rules: [Rule{ parent: 'r', children: ['a\f'] }] },
+		RuleSet{ ignore_attrs: ['x\ry'] },
 		RuleSet{ rules: [Rule{ parent: 'r', children: ['a'], key: ['x#y'] }] },
 		RuleSet{ rules: [Rule{ parent: 'r', children: ['a'], max: -1 }] },
 		RuleSet{ ignore_attrs: [''] },
@@ -926,7 +974,7 @@ fn test_rule_sets_are_written_and_read_back() {
 			assert false, t
 		}
 	}
-	// any parent or child is written `*`
+	// spellings that compile alike are written as one: any parent or child `*`, the own text `.`
 	assert format_rules(RuleSet{
 		rules: [Rule{}, Rule{
 			parent:   ''
