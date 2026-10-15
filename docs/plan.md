@@ -98,17 +98,19 @@ a real schema needs it, with its own tests.
 8. **Annotations.** Each `xsd:appinfo` is kept as raw text, keyed by the schema component and its
    `source` attribute, and is not interpreted here. Vocabularies keep their own metadata there,
    and their consumers read it through this API.
-9. **Schema location.** A schema is passed in explicitly: one or more paths, or a directory that
-   maps namespace and file name to a path. A document's `xsi:schemaLocation` is reported to the
-   caller and never fetched.
+9. **Schema location.** A schema is passed in explicitly, as one or more paths. An import is read
+   from its `schemaLocation` when that is a local file; otherwise it is skipped with a note (the
+   location is a hint), and a reference into its namespace fails as undeclared. A document's
+   `xsi:schemaLocation` is reported to the caller and never fetched. The attributes of the xml
+   namespace are built in, for schemas that refer to them without importing their schema.
 
 ## Verification
 
 - **Oracle: the W3C XML Schema test suite** (`w3c/xsdtests`), from step 2 on. Its expected
   verdicts were written by the specification's authors, so they are independent of this code and
-  of libxml2. It is fetched at a pinned commit in CI and never committed. It ships no driver: a
-  small runner reads its index, runs every XSD 1.0 test whose schema compiles, and counts the
-  rest as out of scope, not as failures.
+  of libxml2. It is fetched at a pinned commit (`.xsts-version`, `scripts/fetch_xsts.sh`) and
+  never committed. It ships no driver: `tools/xsts.py` reads its index, runs every XSD 1.0 test,
+  and counts a schema that uses something outside the subset as refused, not as a failure.
 - **Second opinion: libxml2, through lxml** (`etree.XMLSchema`). It gets the same schema and
   document, and the two must agree on the verdict and on where each finding is (line and element).
   The wording may differ. This runs on the schemas written here and on generated mutations of valid
@@ -134,10 +136,14 @@ this element" before "is it in the right place".
 1. **Namespaces** (design 1, done). The namespace mode of the expat check is identical on
    `testdata/`, generated documents and the local real files, and `tools/fuzz_vs_expat.py` finds
    no refused document and no different tree in either mode.
-2. **Schema reader** (design 2, 8, 9). Compile the subset, refuse everything else, resolve groups,
-   attribute groups, extensions and anonymous types, and keep the appinfo. A synthetic schema per
-   construct, and one test per refusal. Done when the real-world schemas compile locally with
-   nothing refused, with counts printed by `flatxml schema <xsd>`.
+2. **Schema reader** (design 2, 8, 9, done). Compile the subset, refuse everything else, resolve
+   groups, attribute groups, extensions and anonymous types, and keep the appinfo. A synthetic
+   schema per construct, and one test per refusal. The real-world schemas compile locally with
+   nothing refused, and their counts match an independent count. On the W3C suite: no valid
+   schema rejected; 744 invalid schemas compile because the rule they break is not checked yet,
+   617 of them an invalid pattern (step 4) and 46 an enumeration value outside its base type
+   (step 4). A missing type is an error when the schema is compiled, where XSD 1.0 allows it
+   until the declaration is used: a documented divergence.
 3. **Typing pass** (design 3). Give each element its declaration by context (parent type and
    child name), without checking order. Report undeclared elements and attributes. On its own
    this already answers "is this element allowed here", and "what kind of element is this".

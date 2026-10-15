@@ -122,3 +122,16 @@ fn test_uris_outlive_the_source() {
 	d.free()
 	assert uri == 'urn:example:a'
 }
+
+fn test_prefixes_in_scope_answer_for_values() {
+	d := resolved('<r xmlns="urn:d" xmlns:p="urn:p"><s xmlns:p="urn:p2"><t/></s><u xmlns=""/></r>')
+	s := d.first_child(d.root())
+	t := d.first_child(s)
+	u := d.next_sibling(s)
+	assert d.ns_uri(d.ns_for_prefix(t, 'p')?) == 'urn:p2'
+	assert d.ns_uri(d.ns_for_prefix(d.root(), 'p')?) == 'urn:p'
+	assert d.ns_uri(d.ns_for_prefix(t, '')?) == 'urn:d'
+	assert d.ns_for_prefix(u, '')? == no_ns
+	assert d.ns_for_prefix(t, 'xml')? == xml_ns
+	assert d.ns_for_prefix(t, 'q') == none
+}

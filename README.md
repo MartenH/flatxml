@@ -1,7 +1,7 @@
 # flatxml
 
-A flat, zero-copy XML parser in V (V3). XML Schema support is planned: see
-[`docs/plan.md`](docs/plan.md).
+A flat, zero-copy XML parser in V (V3), with XML Schema support being built (`flatxml.xsd`):
+see [`docs/plan.md`](docs/plan.md).
 
 flatxml is generic: it knows nothing about any XML vocabulary.
 
@@ -48,6 +48,23 @@ Namespaces in XML 1.0: unbound prefixes, names that are not qualified names, mis
 reserved `xml` and `xmlns` prefixes and namespaces, undeclared prefixes, and attributes with the
 same expanded name.
 
+**XML Schema.** `flatxml.xsd` compiles schema documents into flat tables the same way: components
+in arrays, referring to each other by index. `xsd.load(paths...)` reads the documents and what
+they import, resolves every reference, expands groups and attribute groups, and gives a type
+that extends another its base's content and attributes. It supports the subset of XSD 1.0 in
+the plan and refuses everything else by name and position (`xsd:all at s.xsd:12:5: ... not
+supported`), because a validator that skips a constraint calls invalid documents valid. Each
+`xsd:appinfo` is kept as text for the consumer. Validating documents against a schema is the
+next step of the plan.
+
+```v
+import flatxml.xsd
+
+s := xsd.load('model.xsd')!
+root := s.element('urn:example', 'model')?
+println(s.qname(s.elements[root].name))
+```
+
 ## Verified
 
 Results marked *earlier* predate this repository; the parser has not changed since.
@@ -67,6 +84,14 @@ Results marked *earlier* predate this repository; the parser has not changed sin
   different. The cases only expat rejects are the limitations below. Removing either
   unbound-prefix check from the resolver makes the fuzzer fail within 500 cases.
 - **Past 2 GiB** (*earlier*): a 3 GB file (32.8M nodes, offsets beyond 2³¹) parses in 2.8 s.
+- **Schemas**: four large real-world schemas (5–10 MB each, up to 9,021 element declarations and
+  5,318 complex types) compile with nothing refused, in 27–53 ms. Their counts of elements,
+  types, enumeration values, patterns and appinfo match an independent count of the files.
+- **The W3C XML Schema test suite** (`tools/xsts.py`, 14,367 XSD 1.0 schema tests): no valid
+  schema rejected. 4,020 valid schemas compile and 307 invalid ones are rejected; 9,295 use
+  constructs outside the subset and are refused; 744 invalid ones compile because the rule they
+  break is not checked yet (617 of them an invalid pattern, which the pattern engine of step 4
+  will catch); one is a documented divergence (a missing type is an error at once).
 
 ## Benchmark
 
@@ -115,11 +140,14 @@ tools/check_vs_expat.py bin/flatxml testdata   # identical to expat, element for
 tools/check_vs_expat.py --ns bin/flatxml testdata            # ... with namespaces resolved
 tools/fuzz_vs_expat.py --ns --count 4000 bin/flatxml testdata/*.xml   # random edits
 tools/bench.sh 500                             # against ElementTree and lxml
+bin/flatxml schema model.xsd                   # compile a schema, print what it holds
+scripts/fetch_xsts.sh /tmp/xsts && tools/xsts.py bin/flatxml /tmp/xsts   # W3C schema tests
 ```
 
 CI (`.github/workflows/ci.yml`) builds the pinned V (`.v-version`, and its C bootstrap at
 `.vc-version`), runs the unit tests, checks `testdata/` and an 8 MB generated document against
-expat in both modes, and fuzzes 500 mutations in each.
+expat in both modes, fuzzes 500 mutations in each, and runs the W3C schema tests (fetched at the
+commit `.xsts-version` names, without the NIST datatype set).
 
 ## Licence
 
