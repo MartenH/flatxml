@@ -150,7 +150,8 @@ def xml_1_1(path):
 def batch(flatxml, command, lines):
     proc = subprocess.run([flatxml, command, '--batch'], capture_output=True, text=True,
                           encoding='utf-8', errors='replace', input=''.join(l + '\n' for l in lines))
-    answers = proc.stdout.splitlines()
+    # newlines only: a quoted value may hold characters splitlines() also breaks on
+    answers = proc.stdout.split('\n')[:-1] if proc.stdout else []
     if proc.returncode != 0 or len(answers) != len(lines):
         sys.exit(f'flatxml {command} --batch failed after {len(answers)} of {len(lines)} tests:\n'
                  + proc.stderr[-2000:])

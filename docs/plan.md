@@ -151,11 +151,16 @@ this element" before "is it in the right place".
    On the W3C suite no valid document is reported (6,461 instance tests); 2,678 invalid ones pass
    because their error is in a value or the order of children. 463 real-world files agree with
    libxml2 on every verdict. About 0.34 s on the 500 MB benchmark, namespaces included.
-4. **Simple types** (design 5). Whitespace, enumeration, `maxLength`, the built-in types' lexical
-   spaces, and the pattern engine; patterns and enumeration values in a schema are checked when it
-   compiles. The engine is tested pattern by pattern against lxml, with a one-element schema per
-   pattern. Measured by the W3C suite: the 617 invalid patterns and 46 invalid enumeration values
-   that compile today are rejected, and invalid documents whose error is in a value are reported.
+4. **Simple types** (design 5), in two parts.
+   - **4a, patterns** (done): the pattern engine (`pattern.v`: a parser for XSD's regex syntax, a
+     Pike VM and a lazily built DFA over it), patterns compiled with their schema, and values
+     checked against them after whitespace normalisation. `tools/patterns_vs_lxml.py` compares it
+     with libxml2 string by string. On the W3C suite, invalid schemas that compile fell from 744 to
+     127 and invalid documents that pass from 2,678 to 1,191, with no valid schema or document
+     rejected. Unicode blocks and `\i`/`\c` are refused (505 suite schemas, none real-world).
+   - **4b, the rest of the facets**: whitespace, enumeration (compared by value), `maxLength`, and
+     the built-in types' lexical spaces, both on values in documents and on the enumeration values
+     in a schema.
 5. **Content models** (design 4). Order and occurrence, compared with lxml on the generated
    mutations and the W3C suite, whose right-verdict rate should reach lxml's (about 99%).
 6. **Typed values and the API** (design 7). Read values by type, and give users a small, safe
@@ -172,11 +177,13 @@ Each is adopted at a step, and kept only if the benchmark or the suite shows it 
 
 - **Patterns: a linear-time engine** (step 4), after RE2 and Go's `regexp`: a pattern compiles to
   an NFA run as a Pike VM, so no input can make it backtrack, with DFA states built lazily and
-  cached as they are met. XSD patterns are implicitly anchored and simple, so a cached DFA comes
-  close to one table step per byte.
-- **A verdict per distinct value** (step 4): documents repeat the same values (enumeration
-  literals, units, booleans), so each simple type remembers the strings it has accepted, and a
-  repeat costs one hash lookup instead of a pattern run.
+  cached as they are met. Measured on a 6.8 MB real-world file, whose values are mostly
+  identifiers and paths: validation 25 ms with the Pike VM, 7 ms with the DFA (the parse takes
+  8 ms).
+- **A verdict per distinct value** (step 4), tried and dropped: each simple type remembered the
+  strings it had accepted, so a repeat cost a hash lookup instead of a pattern run. It paid
+  against the Pike VM; against the lazy DFA, hashing a value costs as much as matching it, and
+  validation measured the same with and without it.
 - **Lexical checks by character table** (step 4): validating a built-in type needs to know that a
   value is well formed, not its number, so most checks are a table-driven scan with no conversion.
 - **Counters, not unrolling** (step 5), as libxml2's automata do: expanding `maxOccurs="5000"` into

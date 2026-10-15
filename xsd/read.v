@@ -642,7 +642,9 @@ fn (mut r Reader) restriction(c DocCtx, i u32, idx u32) ! {
 				continue
 			}
 			'pattern' {
+				pat := compile_pattern(value) or { return error('${c.d.pos(ch)}: ${err}') }
 				r.s.simple_types[idx].patterns << value
+				r.s.simple_types[idx].compiled << pat
 			}
 			'whiteSpace' {
 				r.s.simple_types[idx].white_space = match value {

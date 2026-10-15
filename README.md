@@ -62,8 +62,15 @@ schema does not allow, with positions: an element not declared where it is, an u
 missing attribute, text in element-only content, children in simple content, an abstract type,
 `xsi:nil="true"` (no declaration can be nillable here). `xsi:type`, and a schema the document
 names itself (`xsi:schemaLocation`, `xsi:noNamespaceSchemaLocation`), are reported as not
-supported rather than guessed at. Values, and the order and number of children, are the next
-steps of the plan.
+supported rather than guessed at. A value is checked against the patterns of its type, after its
+whitespace is normalised by the type's rule. The other value checks (enumerations, the built-in
+types, lengths) and the order and number of children are the next steps of the plan.
+
+**Patterns** (`xsd.compile_pattern`) are XSD regular expressions run by a linear-time engine:
+a pattern compiles to an NFA, which validation runs as a DFA built lazily as values meet it (a
+table step per byte), and which falls back to a Pike VM past 2,000 states, so no pattern and no
+input can make it backtrack. `\d`, `\w` and `\p{...}` follow the Unicode 15.0 categories. An
+invalid pattern is a compile error of its schema, at its position.
 
 ```v
 import flatxml
@@ -100,14 +107,20 @@ Results marked *earlier* predate this repository; the parser has not changed sin
   5,318 complex types) compile with nothing refused, in 27–53 ms. Their counts of elements,
   types, enumeration values, patterns and appinfo match an independent count of the files.
 - **The W3C XML Schema test suite** (`tools/xsts.py`, 14,367 XSD 1.0 schema tests): no valid
-  schema rejected. 4,020 valid schemas compile and 307 invalid ones are rejected; 9,295 use
-  constructs outside the subset and are refused; 744 invalid ones compile because the rule they
-  break is not checked yet (617 of them an invalid pattern, which the pattern engine of step 4
-  will catch); one is a documented divergence (a missing type is an error at once). Of 6,461
-  instance tests whose schema compiles, no valid document is reported: 3,714 valid documents
-  pass, 47 invalid ones are reported, 22 use something unsupported (`xsi:type`, a schema the
-  document names itself, XML 1.1), and 2,678 invalid ones pass because their error is in a value
-  or in the order or number of children (steps 4 and 5).
+  schema rejected. 3,521 valid schemas compile and 920 invalid ones are rejected; 9,798 use
+  constructs outside the subset and are refused (505 of them for a pattern using a Unicode block
+  or `\i`/`\c`); 127 invalid ones compile because the rule they break is not checked yet; one is
+  a documented divergence (a missing type is an error at once). Of 5,811 instance tests whose
+  schema compiles, no valid document is reported: 3,347 valid documents pass, 1,253 invalid ones
+  are reported, 20 use something unsupported (`xsi:type`, a schema the document names itself,
+  XML 1.1), and 1,191 invalid ones pass because their error is in an enumeration, a built-in
+  type, a length or the order of children (steps 4 and 5).
+- **Patterns against libxml2** (`tools/patterns_vs_lxml.py`): the 43 patterns of the real-world
+  schemas and `testdata`, on 7,190 strings made to probe them, agree on every verdict. Over the
+  suite's 1,240 patterns they disagree on 22 patterns libxml2 compiles and flatxml rejects, and
+  on 112 of 37,591 strings; the suite expects flatxml's answer for 21 of the 22 (the 22nd was a
+  flatxml bug, fixed), and the strings are libxml2's automaton going wrong (it rejects
+  `foo7777baz` for `foo\w*\d{4}baz`) or treating `^` as an anchor.
 - **Validation of real-world files**: 463 of the 697 files, against the schema each declares,
   agree with libxml2 on every verdict (461 valid; 2 invalid, reported at the same line).
 
@@ -173,32 +186,34 @@ afterwards.
 Resolving namespaces on the same document takes about 105 ms more, roughly a tenth of the parse.
 
 **Validating a large document** against `testdata/inventory.xsd`, start to finish: the whole
-process's wall time and peak memory (parse, namespaces, validation). flatxml does not yet check
-values or the order of children, which lxml and xmlschema do (steps 4 and 5 of the plan).
+process's wall time and peak memory (parse, namespaces, validation). flatxml checks patterns but
+not yet enumerations, built-in types, lengths or the order of children, which lxml and xmlschema
+do (steps 4 and 5 of the plan).
 
 | validator | 8 MB | 500 MB |
 |---|---|---|
-| **flatxml** | 0.03 s, 30 MB | 1.5 s, 1.2 GB (validation itself 0.34 s) |
+| **flatxml** | 0.03 s, 30 MB | 1.5 s, 1.2 GB (validation itself 0.53 s) |
 | lxml | 0.26 s, 142 MB | 16.8 s, 7.5 GB (parse 8.3 s, validation 2.9 s) |
 | xmlschema 4.3.2 | 3.6 s, 152 MB | not run |
 
 **The W3C XML Schema test suite**: thousands of small files, each compiled or validated once.
-The fair rows are "the same work": the 5,072 schemas flatxml does not refuse, and the 6,457
+The fair rows are "the same work": the 4,569 schemas flatxml does not refuse, and the 5,807
 documents of those schemas that every engine compiled, the same files for each. Times are the work
 alone (compiling the schemas; reading and validating the documents, not compiling their schemas
-again). "Right" counts verdicts that match the suite's expected ones.
+again), the range of three runs. "Right" counts verdicts that match the suite's expected ones.
 
 | engine | tests | schemas: time | right | documents: time | right |
 |---|---|---|---|---|---|
-| **flatxml** | the same work | 0.10 s | 4,327 of 5,072 | 0.12 s | 3,757 of 6,435 |
-| lxml | the same work | 0.12 s | 5,006 of 5,072 | 0.14 s | 6,410 of 6,457 |
-| xmlschema 4.3.2 | the same work | 14.6 s | 5,066 of 5,072 | 3.0 s | 6,422 of 6,457 |
-| lxml | all XSD 1.0 tests | 1.00 s | 13,913 of 14,367 | 1.32 s | 24,721 of 24,832 |
-| xmlschema 4.3.2 | all XSD 1.0 tests | 35.7 s | 14,346 of 14,367 | 21.9 s | 24,864 of 24,946 |
+| **flatxml** | the same work | 0.10 s | 4,441 of 4,569 | 0.13 s | 4,596 of 5,787 |
+| lxml | the same work | 0.11–0.13 s | 4,506 of 4,569 | 0.09–0.11 s | 5,775 of 5,807 |
+| xmlschema 4.3.2 | the same work | 12.3 s | 4,563 of 4,569 | 1.9 s | 5,781 of 5,807 |
+| lxml | all XSD 1.0 tests | 0.98–1.07 s | 13,913 of 14,367 | 1.22–1.30 s | 24,721 of 24,832 |
+| xmlschema 4.3.2 | all XSD 1.0 tests | 35.9 s | 14,346 of 14,367 | 22.2 s | 24,864 of 24,946 |
 
-On files this small, flatxml and lxml are level. flatxml's verdicts are right less often until
-steps 4 and 5: 744 invalid schemas compile because their error is in a pattern or an enumeration
-value, and invalid documents pass when their error is in a value or the order of children.
+On files this small, flatxml and lxml are level. flatxml's verdicts on schemas are right nearly as
+often as lxml's (97% against 99%); on documents less often (79% against 99%) until the rest of
+step 4 and step 5, since invalid documents pass when their error is in an enumeration, a
+built-in type, a length or the order of children.
 
 Reproduce with `tools/compare/run.sh <file>` (all five parsers; it fetches and builds quick-xml
 and pugixml at pinned versions) and `unshare -rn tools/xsts_bench.py bin/flatxml <suite>`. These
@@ -220,6 +235,9 @@ Non-validating, and lenient where that does not change how a well-formed file re
 - Text is returned as the document's bytes. A document in an encoding other than UTF-8 (or
   ASCII), such as ISO-8859-1 or UTF-16, is not converted.
 - XML 1.1 is not supported. A document that declares it is read as XML 1.0, as expat reads it.
+- Patterns: Unicode block escapes (`\p{IsLatin-1Supplement}`) and the XML name classes (`\i`,
+  `\c`) are refused. Categories follow Unicode 15.0, where XSD 1.0 cites Unicode 3.1, so a
+  character assigned since is in its category here.
 - With namespaces resolved, the parts of a qualified name are not validated either (`p:1a` is
   accepted), and colons in processing-instruction targets and in DTD declarations, which the
   parser skips, are not checked.
@@ -245,6 +263,7 @@ tools/bench.sh 500                             # against ElementTree and lxml
 tools/compare/run.sh <file>                    # against quick-xml, pugixml, lxml, ElementTree
 bin/flatxml schema model.xsd                   # compile a schema, print what it holds
 bin/flatxml validate model.xsd model.xml       # check a document against it
+tools/patterns_vs_lxml.py bin/flatxml model.xsd   # its patterns against libxml2's, string by string
 scripts/fetch_xsts.sh /tmp/xsts && tools/xsts.py bin/flatxml /tmp/xsts   # W3C schema tests
 ```
 

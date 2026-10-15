@@ -39,7 +39,8 @@ def flatxml_batch(flatxml, command, lines):
     """The answers to a batch, and the time flatxml spent on the work (--times)."""
     proc = subprocess.run([flatxml, command, '--batch', '--times'], capture_output=True, text=True,
                           encoding='utf-8', errors='replace', input=''.join(l + '\n' for l in lines))
-    answers = proc.stdout.splitlines()
+    # newlines only: a quoted value may hold characters splitlines() also breaks on
+    answers = proc.stdout.split('\n')[:-1] if proc.stdout else []
     spent = [l for l in proc.stderr.splitlines() if l.startswith('time ')]
     if proc.returncode != 0 or len(answers) != len(lines) or not spent:
         sys.exit(f'flatxml {command} --batch failed after {len(answers)} of {len(lines)} lines:\n'
