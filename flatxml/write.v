@@ -73,7 +73,7 @@ fn write_through_temp(path string, emit fn (mut f FileOut) !) ! {
 		os.rm(tmp) or {}
 		return err
 	}
-	os.rename(tmp, target) or {
+	replace_file(tmp, target) or {
 		os.rm(tmp) or {}
 		return err
 	}

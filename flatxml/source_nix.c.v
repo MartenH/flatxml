@@ -96,6 +96,11 @@ fn (mut f FileOut) sync_and_close() ! {
 	f.close()!
 }
 
+// replace_file renames tmp to target, replacing target if it exists.
+fn replace_file(tmp string, target string) ! {
+	os.rename(tmp, target)!
+}
+
 // sync_dir puts a directory's entries on disk, so a file renamed into it stays renamed.
 fn sync_dir(dir string) ! {
 	fd := C.open(&char(dir.str), C.O_RDONLY | C.O_DIRECTORY, 0)

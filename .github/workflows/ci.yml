@@ -87,3 +87,55 @@ jobs:
           name: fuzz-failures
           path: ${{ runner.temp }}/fuzz
           if-no-files-found: ignore
+
+  # The command cross-built for Windows (mingw-w64) and run there: reading, writing over an
+  # existing file, edits, a merge and a diff, compared with what Linux writes.
+  windows-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pinned V
+        uses: ./.github/actions/setup-v
+
+      - name: Cross-build for Windows
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+          mkdir -p win
+          v -os windows -cc x86_64-w64-mingw32-gcc -o win/flatxml.exe cmd/cli
+          v -o bin-linux-flatxml cmd/cli
+          printf 'attr\t/\tk\tv\ninsert\t/\t0\t<n/>\nmove\t/1\t0\t/0\n' | ./bin-linux-flatxml edit testdata/tricky.xml win/edited-linux.xml -
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatxml-windows
+          path: win
+
+  windows-run:
+    needs: windows-build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatxml-windows
+          path: win
+
+      - name: Run on Windows
+        run: |
+          set -e
+          win/flatxml.exe roundtrip testdata
+          win/flatxml.exe write testdata/tricky.xml "$RUNNER_TEMP/copy.xml"
+          cmp testdata/tricky.xml "$RUNNER_TEMP/copy.xml"
+          # over an existing file
+          win/flatxml.exe write testdata/namespaces.xml "$RUNNER_TEMP/copy.xml"
+          cmp testdata/namespaces.xml "$RUNNER_TEMP/copy.xml"
+          printf 'attr\t/\tk\tv\ninsert\t/\t0\t<n/>\nmove\t/1\t0\t/0\n' | win/flatxml.exe edit testdata/tricky.xml "$RUNNER_TEMP/edited.xml" -
+          cmp win/edited-linux.xml "$RUNNER_TEMP/edited.xml"
+          win/flatxml.exe apply --check testdata/tricky.xml "$RUNNER_TEMP/edited.xml" "$RUNNER_TEMP/applied.xml"
+          # a diff that finds changes exits 1
+          if win/flatxml.exe diff testdata/tricky.xml "$RUNNER_TEMP/edited.xml"; then exit 1; fi

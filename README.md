@@ -91,7 +91,7 @@ subtree of i        i .. end[i]
 So there are no child or sibling pointers, skipping a subtree is a single read, and "every
 element named X" is a linear scan of one array. A node takes 28 bytes and an attribute 12.
 
-**Text** is never copied while parsing. Spans point into the memory-mapped file. Entities and line
+**Text** is never copied while parsing. Spans point into the memory-mapped file (on Windows, the file read into memory). Entities and line
 endings are decoded only when `text()` or `attr_value()` is called, and only if the span needs it.
 References are checked at parse time, so decoding can never fail. An element whose only content
 is text keeps that text on the element. Text nodes exist only for mixed content.
