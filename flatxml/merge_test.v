@@ -1212,3 +1212,15 @@ fn test_a_merged_view_written_review_cases() {
 	})
 	assert e.merge(parse_rules('r g key=@k merge')!)!.xml()! == '<r>\n  <g k="1">\n    <c/>\n  </g>\n</r>'
 }
+
+fn test_a_node_names_the_rule_that_put_it_together() {
+	m := merged({
+		'a.xml': '<r><pkg><n>A</n><x>1</x><z/></pkg></r>'
+	}, pkg_rules)
+	root := m.root()
+	assert root.rule() == none
+	pkg := root.kids()[0]
+	assert pkg.rule()? == 0
+	kids := pkg.kids()
+	assert kids.map(it.rule() or { -1 }) == [1, 2, -1]
+}

@@ -954,6 +954,16 @@ pub fn (n MNode) key() string {
 	return if n.i == no_mnode { '' } else { n.m.key_of(n.i) }
 }
 
+// rule is the number of the rule, in the rule set the view was merged by, that put the node
+// together with its siblings: its aggregation's rule. None for the root and for a child no rule
+// names.
+pub fn (n MNode) rule() ?int {
+	if n.i == no_mnode || n.m.rule[n.i] == no_rule {
+		return none
+	}
+	return int(n.m.rule[n.i])
+}
+
 // keyed reports whether the node is identified by a key.
 pub fn (n MNode) keyed() bool {
 	return n.i != no_mnode && n.m.kind[n.i] == .keyed
