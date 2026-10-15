@@ -174,6 +174,20 @@ fn test_mixed_text_that_differs_is_reported() {
 	assert m.root().child('d', '').text() == 'one  two'
 }
 
+fn test_mixed_content_that_differs_inside_a_child_is_reported() {
+	m := merged({
+		'a.xml': '<r><desc>Hello <b>x</b></desc></r>'
+		'b.xml': '<r><desc>Hello <b>y</b></desc></r>'
+	}, 'r desc single merge')
+	assert kinds(m) == [.value_differs]
+	// the same text in another place among the children differs too
+	p := merged({
+		'a.xml': '<r><p>ab<i/></p></r>'
+		'b.xml': '<r><p>a<i/>b</p></r>'
+	}, 'r p single merge\np i single merge')
+	assert kinds(p) == [.value_differs]
+}
+
 fn test_single_children_of_many_names() {
 	mut a, mut b := '<r>', '<r>'
 	for i in 0 .. 300 {

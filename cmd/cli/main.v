@@ -14,6 +14,11 @@
 //   flatxml roundtrip [--nodes|--rewrite] [--ext EXT] <file|dir>...   write each document and
 //                                  compare: the same bytes as the file, or with --rewrite the
 //                                  same tree; prints the files that differ and a count
+//   flatxml diff [--rules <file>] [--ns] [--jobs N] [--ext EXT] [--brief] <A> <B>   the changes
+//                                  that make A into B, one a line, and their counts; A and B are
+//                                  each a file, a directory or @list (a file naming one a line),
+//                                  read as one set, merged by the rules (none: as written).
+//                                  Exits 0 when they are the same, 1 when they differ, 2 on trouble
 //   flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups]
 //                 <file|dir>...    read many files as one set and merge them by the rules
 //                                  (`flatxml.parse_rules`): the merged view's size, its time,
@@ -48,6 +53,8 @@ const usage = 'usage:
   flatxml roundtrip [--nodes|--rewrite] [--ext EXT] <file|dir>...   write and compare each
   flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups] <file|dir>...
                                 many files merged by rules: the view, its time, the problems
+  flatxml diff [--rules <file>] [--ns] [--jobs N] [--ext EXT] [--brief] <A> <B>
+                                what changed from A to B (each a file, a directory or @list)
   flatxml schema <xsd>...       compile an XML Schema (and what it imports), print what it holds
   flatxml schema --batch        one schema per stdin line (documents tab-separated): ok | error<TAB>why
   flatxml validate <xsd> <doc>...  check documents against a schema
@@ -112,6 +119,9 @@ fn main() {
 		}
 		'merge' {
 			merge_set(args[1..])
+		}
+		'diff' {
+			diff_sets(args[1..])
 		}
 		'stats' {
 			parse_only := args[1] == '--parse-only'
@@ -480,16 +490,28 @@ mut:
 	rules    string // merge: the rules file
 	problems int = 10 // merge: how many problems to print
 	lookups  bool // merge: time looking every node up
+	brief    bool // diff: the counts only
 }
 
-// read_set_args reads the arguments of `set`, or of `merge` when merging, and exits with the usage
-// on a flag the command does not take or a value it cannot use.
-fn read_set_args(args []string, merging bool) SetArgs {
+// set_flags are the flags each command that reads a set takes.
+const set_flags = {
+	'set':   ['--ns', '--jobs', '--ext']
+	'merge': ['--ns', '--jobs', '--ext', '--rules', '--problems', '--lookups']
+	'diff':  ['--ns', '--jobs', '--ext', '--rules', '--brief']
+}
+
+// read_set_args reads the arguments of `set`, `merge` or `diff` (cmd), and exits with the usage on
+// a flag the command does not take or a value it cannot use.
+fn read_set_args(args []string, cmd string) SetArgs {
 	mut a := SetArgs{}
 	mut k := 0
 	for k < args.len {
-		if !merging && args[k] in ['--rules', '--problems', '--lookups'] {
-			eprintln('flatxml set: ${args[k]} is for merge\n${usage}')
+		if args[k].starts_with('--') && args[k] !in set_flags[cmd] {
+			eprintln('flatxml ${cmd}: ${args[k]} is not one of its flags\n${usage}')
+			exit(2)
+		}
+		if args[k] in ['--jobs', '--ext', '--rules', '--problems'] && k + 1 == args.len {
+			eprintln('flatxml ${cmd}: ${args[k]} takes a value\n${usage}')
 			exit(2)
 		}
 		match args[k] {
@@ -520,6 +542,9 @@ fn read_set_args(args []string, merging bool) SetArgs {
 			'--lookups' {
 				a.lookups = true
 			}
+			'--brief' {
+				a.brief = true
+			}
 			else {
 				a.paths << args[k]
 			}
@@ -533,20 +558,49 @@ fn read_set_args(args []string, merging bool) SetArgs {
 fn (a &SetArgs) files() []string {
 	mut files := []string{}
 	for p in a.paths {
-		if os.is_dir(p) {
-			mut found := os.walk_ext(p, a.ext)
-			found.sort()
-			files << found
-		} else {
-			files << p
-		}
+		files << a.files_of(p)
 	}
 	return files
 }
 
+// files_of is the files one operand names: a file, every file below a directory ending in ext,
+// or, for `@list`, the files and directories list names, one a line, a relative one from the
+// list's directory. A list cannot name another.
+fn (a &SetArgs) files_of(p string) []string {
+	if p.starts_with('@') {
+		list := p[1..]
+		mut files := []string{}
+		for line in os.read_lines(list) or {
+			eprintln('flatxml: ${err}')
+			exit(2)
+		} {
+			name := line.trim_space()
+			if name == '' {
+				continue
+			}
+			if name.starts_with('@') {
+				eprintln('flatxml: ${list}: names another list, ${name}')
+				exit(2)
+			}
+			files << a.files_of(if os.is_abs_path(name) {
+				name
+			} else {
+				os.join_path(os.dir(list), name)
+			})
+		}
+		return files
+	}
+	if os.is_dir(p) {
+		mut found := os.walk_ext(p, a.ext)
+		found.sort()
+		return found
+	}
+	return [p]
+}
+
 // load_set reads files and directories as one document set and prints what it holds.
 fn load_set(args []string) {
-	a := read_set_args(args, false)
+	a := read_set_args(args, 'set')
 	sw := time.new_stopwatch()
 	files := a.files()
 	listed := sw.elapsed()
@@ -698,7 +752,7 @@ fn tree_difference(d &flatxml.Doc, xml string) ?string {
 // (`flatxml.parse_rules`), and prints what the view holds and what the rules forbid. It exits 1
 // when a file fails to read or the rules find a problem.
 fn merge_set(args []string) {
-	a := read_set_args(args, true)
+	a := read_set_args(args, 'merge')
 	if a.rules == '' || a.paths.len == 0 {
 		eprintln(usage)
 		exit(2)
@@ -780,4 +834,73 @@ fn time_lookups(m &flatxml.Merged) {
 	}
 	by_name := sw.elapsed()
 	println('lookups: ${found} of ${paths.len} key paths in ${ms(by_path)}, ${found_named} children by name and key in ${ms(by_name)}')
+}
+
+// diff_sets reads two sets, merges each by the rules (none: each as written), and prints the
+// changes from the first to the second and their counts. It exits 0 when there are none, 1 when
+// there are, and 2 when a file or the rules cannot be read.
+fn diff_sets(args []string) {
+	a := read_set_args(args, 'diff')
+	if a.paths.len != 2 {
+		eprintln(usage)
+		exit(2)
+	}
+	rules := if a.rules == '' {
+		flatxml.RuleSet{}
+	} else {
+		flatxml.parse_rules(os.read_file(a.rules) or {
+			eprintln(err)
+			exit(2)
+		}) or {
+			eprintln('${a.rules}: ${err}')
+			exit(2)
+		}
+	}
+	sw := time.new_stopwatch()
+	mut views := []&flatxml.Merged{}
+	for p in a.paths {
+		mut s := flatxml.DocSet.new()
+		errs := s.load(a.files_of(p), jobs: a.jobs, namespaces: a.ns)
+		for e in errs {
+			eprintln('flatxml diff: ${one_line(e.msg)}')
+		}
+		if errs.len > 0 {
+			exit(2)
+		}
+		v := s.merge(rules) or {
+			eprintln(err)
+			exit(2)
+		}
+		if v.problems.len > 0 {
+			eprintln('flatxml diff: ${p}: the rules find ${v.problems.len} problems (see flatxml merge)')
+		}
+		views << v
+	}
+	read := sw.elapsed()
+	mut d := flatxml.diff(views[0], views[1])
+	compared := sw.elapsed() - read
+	mut out := os.stdout()
+	mut counts := map[string]int{}
+	for k in 0 .. d.changes.len {
+		c := d.changes[k]
+		counts['${c.kind}']++
+		if !a.brief {
+			write_or_exit(mut out, d.describe(c) + '\n')
+		}
+	}
+	mut parts := []string{}
+	for kind in ['removed', 'added', 'moved', 'text', 'attr'] {
+		if n := counts[kind] {
+			parts << '${n} ${kind}'
+		}
+	}
+	what := if parts.len == 0 {
+		'no changes'
+	} else {
+		'${d.changes.len} changes: ${parts.join(', ')}'
+	}
+	println('${what} (${views[0].len()} and ${views[1].len()} nodes, ${d.compared()} pairs compared; read and merged in ${ms(read)}, compared in ${ms(compared)})')
+	if d.changes.len > 0 {
+		exit(1)
+	}
 }

@@ -590,9 +590,10 @@ fn (mut m Merged) limit(p u32, rule &CRule, k int, e int) int {
 	return k + rule.max
 }
 
-// differs reports where the contributions to node n disagree with its first: their text (all of
-// it, where text is mixed with elements), or the value of an attribute both have (unless the
-// rules ignore it).
+// differs reports where the contributions to node n disagree with its first: their own text,
+// run by run in its place among the children (`Node.text_runs`), and where text is mixed with
+// elements, all the text inside them, which the view does not merge child by child; or the
+// value of an attribute both have (unless the rules ignore it).
 fn (mut m Merged) differs(n u32) {
 	lo, hi := m.frag_lo[n], m.frag_lo[n + 1]
 	if hi - lo < 2 {
@@ -600,11 +601,15 @@ fn (mut m Merged) differs(n u32) {
 	}
 	f0 := m.frags[lo]
 	d0 := m.set.docs[f0.doc]
-	t0 := Node{d0, f0.i}.text()
+	n0 := Node{d0, f0.i}
+	t0 := n0.text_runs()
+	mixed0 := d0.has_text_children(f0.i)
 	a_lo, a_hi := d0.attr_range(f0.i)
 	for f in m.frags[lo + 1..hi] {
 		d := m.set.docs[f.doc]
-		if Node{d, f.i}.text() != t0 {
+		nf := Node{d, f.i}
+		mixed := mixed0 || d.has_text_children(f.i)
+		if nf.text_runs() != t0 || (mixed && nf.text() != n0.text()) {
 			m.problems << Problem{
 				kind: .value_differs
 				node: n
@@ -794,7 +799,7 @@ fn (ix &KeyIndex) find(m &Merged, a u32, b u32, key string) ?u32 {
 pub struct MNode {
 pub:
 	m &Merged = unsafe { nil }
-	i u32 // no_mnode for an empty handle
+	i u32     = no_mnode // no_mnode for an empty handle
 }
 
 // len is the number of merged nodes.
@@ -1007,6 +1012,11 @@ pub fn (n MNode) fragments() []Node {
 // text is the text of the first contribution, all of it where text is mixed with elements.
 pub fn (n MNode) text() string {
 	return n.fragment(0).text()
+}
+
+// text_runs are the own text of the first contribution, run by run (`Node.text_runs`).
+pub fn (n MNode) text_runs() []TextRun {
+	return n.fragment(0).text_runs()
 }
 
 // attr is the attribute name of the first contribution that has it; '' for none.

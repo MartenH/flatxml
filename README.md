@@ -57,6 +57,22 @@ for f in pump.fragments() {
 }
 ```
 
+Two versions compare as their merged views, so with rules the files a model is kept in do not
+count, and without rules each document is its own tree. Each change names the node in both
+versions, with its file and line.
+
+```v
+import flatxml
+
+old := flatxml.parse_file('old.xml') or { panic(err) }
+new := flatxml.parse_file('new.xml') or { panic(err) }
+mut d := flatxml.diff_docs(old, new, flatxml.RuleSet{}) or { panic(err) }
+for k in 0 .. d.changes.len {
+	// `~ /model/items/item[2]/price: "12" -> "14"  old.xml:7:5 -> new.xml:7:5`
+	println(d.describe(d.changes[k]))
+}
+```
+
 The library is the `flatxml/` folder (`flatxml`, and `flatxml.xsd` below it); a project vendors
 that folder at a stated commit.
 
@@ -103,6 +119,12 @@ matters. A key is unique in its scope, the nearest ancestor that is not a single
 node is also found by its key path: one hash probe per key. 560 real-world files (1.78M
 elements) merge in about 0.2 s on one thread. The rules, and the problems the view reports,
 are in [docs/documents.md](docs/documents.md).
+
+**Diffs** (`diff`) compare two merged views top down. Children the rules identify are matched
+by identity, and the rest are aligned by a longest common subsequence (Myers). Every subtree is
+hashed once, so an unchanged one is skipped whole, and comparing two versions of 1.78M nodes
+costs the hashing (about 0.2 s, both sides at once) and then what changed. Each change says where it
+goes in the old view, so a diff can be applied to it ([docs/documents.md](docs/documents.md)).
 
 **Namespaces** are resolved on request, by `resolve_namespaces`, in a second linear pass: one
 more array beside the nodes (each element's namespace id) and one beside the attributes. Names
@@ -392,6 +414,8 @@ tools/fuzz_vs_expat.py --ns --count 4000 bin/flatxml testdata/*.xml   # random e
 tools/bench.sh 500                             # against ElementTree and lxml
 tools/compare/run.sh <file>                    # against quick-xml, pugixml, lxml, ElementTree
 bin/flatxml merge --rules rules.txt parts/      # many files read as one by rules: size, time, problems
+bin/flatxml diff [--rules rules.txt] old/ new/  # what changed: removed, added, moved, texts, attributes
+tools/diff_vs_edits.py bin/flatxml *.xml       # known edits, each reported as exactly that change
 bin/flatxml schema model.xsd                   # compile a schema, print what it holds
 bin/flatxml validate model.xsd model.xml       # check a document against it
 tools/patterns_vs_lxml.py bin/flatxml model.xsd   # its patterns against libxml2's, string by string
