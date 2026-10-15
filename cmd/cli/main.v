@@ -510,6 +510,10 @@ fn read_set_args(args []string, cmd string) SetArgs {
 			eprintln('flatxml ${cmd}: ${args[k]} is not one of its flags\n${usage}')
 			exit(2)
 		}
+		if args[k] in ['--jobs', '--ext', '--rules', '--problems'] && k + 1 == args.len {
+			eprintln('flatxml ${cmd}: ${args[k]} takes a value\n${usage}')
+			exit(2)
+		}
 		match args[k] {
 			'--ns' {
 				a.ns = true
@@ -560,18 +564,29 @@ fn (a &SetArgs) files() []string {
 }
 
 // files_of is the files one operand names: a file, every file below a directory ending in ext,
-// or, for `@list`, the files and directories list names, one a line.
+// or, for `@list`, the files and directories list names, one a line, a relative one from the
+// list's directory. A list cannot name another.
 fn (a &SetArgs) files_of(p string) []string {
 	if p.starts_with('@') {
+		list := p[1..]
 		mut files := []string{}
-		for line in os.read_lines(p[1..]) or {
+		for line in os.read_lines(list) or {
 			eprintln('flatxml: ${err}')
 			exit(2)
 		} {
 			name := line.trim_space()
-			if name != '' {
-				files << a.files_of(name)
+			if name == '' {
+				continue
 			}
+			if name.starts_with('@') {
+				eprintln('flatxml: ${list}: names another list, ${name}')
+				exit(2)
+			}
+			files << a.files_of(if os.is_abs_path(name) {
+				name
+			} else {
+				os.join_path(os.dir(list), name)
+			})
 		}
 		return files
 	}
@@ -862,14 +877,15 @@ fn diff_sets(args []string) {
 		views << v
 	}
 	read := sw.elapsed()
-	d := flatxml.diff(views[0], views[1])
+	mut d := flatxml.diff(views[0], views[1])
 	compared := sw.elapsed() - read
 	mut out := os.stdout()
 	mut counts := map[string]int{}
-	for c in d.changes {
+	for k in 0 .. d.changes.len {
+		c := d.changes[k]
 		counts['${c.kind}']++
 		if !a.brief {
-			write_or_exit(mut out, c.describe() + '\n')
+			write_or_exit(mut out, d.describe(c) + '\n')
 		}
 	}
 	mut parts := []string{}

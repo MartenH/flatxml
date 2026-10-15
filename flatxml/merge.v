@@ -590,9 +590,10 @@ fn (mut m Merged) limit(p u32, rule &CRule, k int, e int) int {
 	return k + rule.max
 }
 
-// differs reports where the contributions to node n disagree with its first: their own text
-// (beside child elements too, `Node.own_text`), or the value of an attribute both have (unless
-// the rules ignore it).
+// differs reports where the contributions to node n disagree with its first: their own text,
+// run by run in its place among the children (`Node.text_runs`), and where text is mixed with
+// elements, all the text inside them, which the view does not merge child by child; or the
+// value of an attribute both have (unless the rules ignore it).
 fn (mut m Merged) differs(n u32) {
 	lo, hi := m.frag_lo[n], m.frag_lo[n + 1]
 	if hi - lo < 2 {
@@ -600,11 +601,15 @@ fn (mut m Merged) differs(n u32) {
 	}
 	f0 := m.frags[lo]
 	d0 := m.set.docs[f0.doc]
-	t0 := Node{d0, f0.i}.own_text()
+	n0 := Node{d0, f0.i}
+	t0 := n0.text_runs()
+	mixed0 := d0.has_text_children(f0.i)
 	a_lo, a_hi := d0.attr_range(f0.i)
 	for f in m.frags[lo + 1..hi] {
 		d := m.set.docs[f.doc]
-		if Node{d, f.i}.own_text() != t0 {
+		nf := Node{d, f.i}
+		mixed := mixed0 || d.has_text_children(f.i)
+		if nf.text_runs() != t0 || (mixed && nf.text() != n0.text()) {
 			m.problems << Problem{
 				kind: .value_differs
 				node: n
@@ -1009,9 +1014,9 @@ pub fn (n MNode) text() string {
 	return n.fragment(0).text()
 }
 
-// own_text is the own text of the first contribution (`Node.own_text`): not its children's.
-pub fn (n MNode) own_text() string {
-	return n.fragment(0).own_text()
+// text_runs are the own text of the first contribution, run by run (`Node.text_runs`).
+pub fn (n MNode) text_runs() []TextRun {
+	return n.fragment(0).text_runs()
 }
 
 // attr is the attribute name of the first contribution that has it; '' for none.

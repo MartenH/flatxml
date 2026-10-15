@@ -66,9 +66,10 @@ import flatxml
 
 old := flatxml.parse_file('old.xml') or { panic(err) }
 new := flatxml.parse_file('new.xml') or { panic(err) }
-d := flatxml.diff_docs(old, new, flatxml.RuleSet{}) or { panic(err) }
-for c in d.changes {
-	println(c.describe()) // `~ /model/items/item[2]/price: "12" -> "14"  old.xml:7:5 -> new.xml:7:5`
+mut d := flatxml.diff_docs(old, new, flatxml.RuleSet{}) or { panic(err) }
+for k in 0 .. d.changes.len {
+	// `~ /model/items/item[2]/price: "12" -> "14"  old.xml:7:5 -> new.xml:7:5`
+	println(d.describe(d.changes[k]))
 }
 ```
 
@@ -122,7 +123,7 @@ are in [docs/documents.md](docs/documents.md).
 **Diffs** (`diff`) compare two merged views top down. Children the rules identify are matched
 by identity, and the rest are aligned by a longest common subsequence (Myers). Every subtree is
 hashed once, so an unchanged one is skipped whole, and comparing two versions of 1.78M nodes
-costs the hashing (0.16 s, both sides at once) and then what changed. Each change says where it
+costs the hashing (about 0.2 s, both sides at once) and then what changed. Each change says where it
 goes in the old view, so a diff can be applied to it ([docs/documents.md](docs/documents.md)).
 
 **Namespaces** are resolved on request, by `resolve_namespaces`, in a second linear pass: one

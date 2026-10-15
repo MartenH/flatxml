@@ -21,21 +21,22 @@ pub enum ChangeKind {
 	removed // old: the node removed, with everything below it
 	added   // new: the node added, with everything below it; parent and index: where it goes
 	moved   // old: where it was; new: where it is; parent and index: where it goes
-	text    // old and new: the node whose text changed
-	attr    // old and new: the node; name: the attribute; old_value / new_value: none when absent
+	text    // old and new: the node whose own text changed; runs: its new text, run by run
+	attr    // old and new: the node; name: the attribute; before / after: none when absent
 }
 
 // Change is one difference. Nodes are of the old view (`old`, `parent`) or the new one (`new`).
 pub struct Change {
 pub:
 	kind   ChangeKind
-	old    MNode   // the node in the old view; empty for added
-	new    MNode   // the node in the new view; empty for removed
-	parent MNode   // added and moved: the node of the old view it goes under (empty for a root)
-	index  int     // added and moved: its place among the children of new's parent
-	name   string  // attr: the attribute's name
-	before ?string // text: the old text; attr: the old value, none when it was absent
-	after  ?string // text: the new text; attr: the new value, none when it is gone
+	old    MNode     // the node in the old view; empty for added
+	new    MNode     // the node in the new view; empty for removed
+	parent MNode     // added and moved: the node of the old view it goes under (empty for a root)
+	index  int       // added and moved: its place among the children of new's parent
+	name   string    // attr: the attribute's name
+	before ?string   // text: the old text (`show_runs`); attr: the old value, none when absent
+	after  ?string   // text: the new text (`show_runs`); attr: the new value, none when gone
+	runs   []TextRun // text: the new own text, run by run, each in its slot among the children
 }
 
 // Diff is the changes from one view to another.
@@ -51,6 +52,10 @@ mut:
 	tag_map  []u32 // a name id of the new view's table -> the same name's id in the old one
 	compared int   // pairs of nodes entered
 	max_d    int   // the most differences an alignment searches for before it pairs greedily
+	// for describing: each file's lines, each parent's children's places among their names
+	lines      map[u64]LineIndex
+	old_places map[u32][]int
+	new_places map[u32][]int
 }
 
 @[params]
@@ -131,33 +136,75 @@ pub fn (d &Diff) compared() int {
 
 // --- hashing --------------------------------------------------------------------------------
 
+// What each part of a node adds to its hash starts from a seed of its own, so that no two parts
+// can stand in for each other (a name for a text, an attribute's name for its value).
+const seed_node = u64(0x243F_6A88_85A3_08D3)
+const seed_run = u64(0x1319_8A2E_0370_7344)
+const seed_attr = u64(0xA409_3822_299F_31D0)
+const seed_child = u64(0x082E_FA98_EC4E_6C89)
+
+// fmix is the 64-bit finaliser of MurmurHash3: every bit of x moves every bit of the result.
+@[inline]
+fn fmix(x_ u64) u64 {
+	mut x := x_
+	x ^= x >> 33
+	x *= 0xff51_afd7_ed55_8ccd
+	x ^= x >> 33
+	x *= 0xc4ce_b9fe_1a85_ec53
+	x ^= x >> 33
+	return x
+}
+
+// mix is h followed by v: not the same as v followed by h.
 @[inline]
 fn mix(h u64, v u64) u64 {
-	mut x := (h ^ v) * 0x9E37_79B9_7F4A_7C15
-	x ^= x >> 31
-	return x
+	return fmix(h * 0x9E37_79B9_7F4A_7C15 + v)
 }
 
 fn text_hash(s string) u64 {
 	return hash.wyhash_c(s.str, u64(s.len), name_seed)
 }
 
-// subtree_hashes hashes every node of m with what is below it: its name, text, attributes (in
-// any order) and children (in order). Children come after their parent, so one pass from the
-// end finds every child hashed before its parent.
+// subtree_hashes hashes every node of m with what is below it: its name, its own text run by
+// run with each run's slot, its attributes (each name with its value, in any order) and its
+// children (in order). Children come after their parent, so one pass from the end finds every
+// child hashed before its parent.
 fn subtree_hashes(m &Merged) []u64 {
 	mut h := []u64{len: m.len()}
 	t := m.set.tab
 	for i := m.len() - 1; i >= 0; i-- {
 		n := MNode{m, u32(i)}
-		mut x := mix(t.hash[m.name[i]], text_hash(n.own_text()))
+		mut x := mix(seed_node, t.hash[m.name[i]])
+		x = mix(x, runs_hash(n))
 		x = mix(x, attrs_hash(n))
 		for c := m.kid_lo[i]; c < m.kid_lo[i + 1]; c++ {
-			x = mix(x, h[c])
+			x = mix(mix(x, seed_child), h[c])
 		}
 		put(h, i, x)
 	}
 	return h
+}
+
+// runs_hash hashes the node's own text as `text_runs` has it, without making the list where it
+// is the text of an element that holds only text.
+fn runs_hash(n MNode) u64 {
+	f := n.fragment(0)
+	if !f.doc.has_text_children(f.i) {
+		if f.doc.text_len[f.i] == 0 {
+			return seed_run
+		}
+		return mix(mix(seed_run, 0), text_hash(f.doc.text(f.i)))
+	}
+	mut h := seed_run
+	for r in f.text_runs() {
+		h = mix(mix(h, u64(r.slot)), text_hash(r.text))
+	}
+	return h
+}
+
+@[inline]
+fn attr_hash(t &Names, tag u32, value string) u64 {
+	return mix(mix(seed_attr, t.hash[tag]), text_hash(value))
 }
 
 // attrs_hash hashes the node's attributes as `attrs` has them, in any order: without making the
@@ -169,12 +216,12 @@ fn attrs_hash(n MNode) u64 {
 		f := n.fragment(0)
 		lo, hi := f.doc.attr_range(f.i)
 		for a := lo; a < hi; a++ {
-			h += mix(t.hash[f.doc.attr_tag[a]], text_hash(f.doc.attr_value(a)))
+			h += attr_hash(t, f.doc.attr_tag[a], f.doc.attr_value(a))
 		}
 		return h
 	}
 	for a in n.attrs() {
-		h += mix(t.hash[a.tag], text_hash(a.value))
+		h += attr_hash(t, a.tag, a.value)
 	}
 	return h
 }
@@ -211,14 +258,15 @@ fn (mut d Diff) pair(o u32, n u32) {
 	}
 	d.compared++
 	om, nm := d.old.node(o), d.new.node(n)
-	ot, nt := om.own_text(), nm.own_text()
+	ot, nt := om.text_runs(), nm.text_runs()
 	if ot != nt {
 		d.changes << Change{
 			kind:   .text
 			old:    om
 			new:    nm
-			before: ot
-			after:  nt
+			before: show_runs(ot)
+			after:  show_runs(nt)
+			runs:   nt
 		}
 	}
 	d.attrs(om, nm)
@@ -377,19 +425,32 @@ fn (mut d Diff) children(o u32, n u32) {
 }
 
 // pair_by_name pairs, in order, the old and new children of one gap between aligned ones that
-// have the same name.
+// have the same name: each name's old children in a queue, read past the ones passed.
 fn (mut d Diff) pair_by_name(xs []u32, ys []u32, olo u32, nlo u32, mut to_old []u32, mut to_new []u32) {
+	if xs.len == 0 || ys.len == 0 {
+		return
+	}
+	mut places := map[u32][]int{}
+	for k, x in xs {
+		places[d.old.name[x]] << k
+	}
+	mut next := map[u32]int{}
 	mut from := 0
 	for y in ys {
 		t := d.tag_map[d.new.name[y]]
-		for k := from; k < xs.len; k++ {
-			if d.old.name[xs[k]] == t {
-				to_old[y - nlo] = xs[k]
-				to_new[xs[k] - olo] = y
-				from = k + 1
-				break
-			}
+		at := places[t] or { continue }
+		mut k := next[t]
+		for k < at.len && at[k] < from {
+			k++
 		}
+		if k < at.len {
+			x := xs[at[k]]
+			to_old[y - nlo] = x
+			to_new[x - olo] = y
+			from = at[k] + 1
+			k++
+		}
+		next[t] = k
 	}
 }
 
@@ -406,17 +467,19 @@ fn (mut d Diff) moves() {
 		return
 	}
 	mut drop := []bool{len: d.changes.len}
+	mut taken := map[u64]int{} // how many of each bucket are moves already
 	for k, c in d.changes {
 		if c.kind != .added {
 			continue
 		}
 		h := d.nhash[c.new.i]
-		mut ks := removed[h] or { continue }
-		if ks.len == 0 {
+		ks := removed[h] or { continue }
+		at := taken[h]
+		if at == ks.len {
 			continue
 		}
-		r := ks[0]
-		removed[h] = ks[1..].clone()
+		taken[h] = at + 1
+		r := ks[at]
 		drop[r] = true
 		d.changes[k] = Change{
 			kind:   .moved
@@ -473,13 +536,14 @@ fn myers(a []u64, b []u64, base int, max_d int) []XY {
 	}
 	off := n + m
 	mut v := []int{len: 2 * off + 2}
+	// before each round dd, the diagonals it reads: v[off - dd - 1 .. off + dd + 2]
 	mut trace := [][]int{}
 	mut end_d := -1
 	for dd in 0 .. n + m + 1 {
 		if dd > max_d {
 			return greedy(a, b, base)
 		}
-		trace << v.clone()
+		trace << v[imax(0, off - dd - 1)..imin(v.len, off + dd + 2)].clone()
 		for k := -dd; k <= dd; k += 2 {
 			mut x := if k == -dd || (k != dd && v[off + k - 1] < v[off + k + 1]) {
 				v[off + k + 1]
@@ -506,9 +570,10 @@ fn myers(a []u64, b []u64, base int, max_d int) []XY {
 	mut x, mut y := n, m
 	for dd := end_d; dd >= 0; dd-- {
 		vp := trace[dd]
+		o := off - imax(0, off - dd - 1) // where diagonal 0 is in vp
 		k := x - y
-		pk := if k == -dd || (k != dd && vp[off + k - 1] < vp[off + k + 1]) { k + 1 } else { k - 1 }
-		px := vp[off + pk]
+		pk := if k == -dd || (k != dd && vp[o + k - 1] < vp[o + k + 1]) { k + 1 } else { k - 1 }
+		px := vp[o + pk]
 		py := px - pk
 		for x > px && y > py {
 			x--
@@ -521,20 +586,40 @@ fn myers(a []u64, b []u64, base int, max_d int) []XY {
 	return out
 }
 
-// greedy matches each element of b with the next equal element of a not yet passed.
+// greedy matches each element of b with the next equal element of a not yet passed: each value's
+// places in a in a queue, read past the ones passed, so the whole costs one pass of each list.
 fn greedy(a []u64, b []u64, base int) []XY {
+	mut places := map[u64][]int{}
+	for i, h in a {
+		places[h] << i
+	}
+	mut next := map[u64]int{}
 	mut out := []XY{}
 	mut from := 0
 	for j, h in b {
-		for i := from; i < a.len; i++ {
-			if a[i] == h {
-				out << XY{base + i, base + j}
-				from = i + 1
-				break
-			}
+		at := places[h] or { continue }
+		mut k := next[h]
+		for k < at.len && at[k] < from {
+			k++
 		}
+		if k < at.len {
+			out << XY{base + at[k], base + j}
+			from = at[k] + 1
+			k++
+		}
+		next[h] = k
 	}
 	return out
+}
+
+@[inline]
+fn imax(a int, b int) int {
+	return if a > b { a } else { b }
+}
+
+@[inline]
+fn imin(a int, b int) int {
+	return if a < b { a } else { b }
 }
 
 // increasing_run is the positions of a longest strictly increasing subsequence of s.
@@ -576,7 +661,15 @@ fn increasing_run(s []int) []int {
 
 // path is where a merged node is, from the root: each step its name, with its key where it has
 // one, or its place among the siblings of its name where there are several (`/r/item[pump]/x[2]`).
+// It reads the siblings at every step; `Diff.path` remembers them, for many paths.
 pub fn (n MNode) path() string {
+	mut places := map[u32][]int{}
+	return path_in(n, mut places)
+}
+
+// path_in is `path`, with each parent's children's places among their names kept in places, by
+// the parent's index in the node's view.
+fn path_in(n MNode, mut places map[u32][]int) string {
 	if !n.ok() {
 		return ''
 	}
@@ -588,16 +681,11 @@ pub fn (n MNode) path() string {
 			step += '[${c.key().replace(key_sep, ',')}]'
 		} else if c.m.kind[c.i] == .each {
 			p := c.parent()
-			mut nth, mut same := 0, 0
-			for s in p.children() {
-				if s.tag() == c.tag() {
-					same++
-					if s.i <= c.i {
-						nth++
-					}
-				}
+			if p.i !in places {
+				places[p.i] = ordinals(p)
 			}
-			if same > 1 {
+			nth := places[p.i][c.i - c.m.kid_lo[p.i]]
+			if nth > 0 {
 				step += '[${nth}]'
 			}
 		}
@@ -608,25 +696,76 @@ pub fn (n MNode) path() string {
 	return '/' + parts.join('/')
 }
 
-// describe is a change in one line: what, where (the node's path), and its positions.
-pub fn (c &Change) describe() string {
-	return match c.kind {
-		.removed {
-			'- ${c.old.path()}  ${c.old.pos()}'
-		}
-		.added {
-			'+ ${c.new.path()}  ${c.new.pos()}'
-		}
-		.moved {
-			'> ${c.old.path()} -> ${c.new.path()}  ${c.old.pos()} -> ${c.new.pos()}'
-		}
-		.text {
-			'~ ${c.new.path()}: ${quoted(c.before)} -> ${quoted(c.after)}  ${c.old.pos()} -> ${c.new.pos()}'
-		}
-		.attr {
-			'@ ${c.new.path()}/@${c.name}: ${quoted(c.before)} -> ${quoted(c.after)}  ${c.old.pos()} -> ${c.new.pos()}'
+// ordinals is, for each child of p, its place among the children of its name, counting from 1,
+// or 0 where it is the only one.
+fn ordinals(p MNode) []int {
+	m := p.m
+	lo, hi := m.kid_lo[p.i], m.kid_lo[p.i + 1]
+	mut count := map[u32]int{}
+	mut out := []int{len: int(hi - lo)}
+	for c := lo; c < hi; c++ {
+		count[m.name[c]]++
+		out[c - lo] = count[m.name[c]]
+	}
+	for c := lo; c < hi; c++ {
+		if count[m.name[c]] == 1 {
+			out[c - lo] = 0
 		}
 	}
+	return out
+}
+
+// path is `MNode.path` for a node of either view, the places among siblings kept between calls.
+pub fn (mut d Diff) path(n MNode) string {
+	if voidptr(n.m) == voidptr(d.old) {
+		return path_in(n, mut d.old_places)
+	}
+	return path_in(n, mut d.new_places)
+}
+
+// pos is the position of a node of either view (its first contribution), each file's lines
+// indexed once.
+pub fn (mut d Diff) pos(n MNode) string {
+	f := n.fragment(0)
+	if !f.ok() {
+		return ''
+	}
+	k := u64(voidptr(f.doc))
+	if k !in d.lines {
+		d.lines[k] = f.doc.line_index()
+	}
+	line, col := d.lines[k].line_col(f.doc.src_off[f.i])
+	return '${f.doc.path}:${line}:${col}'
+}
+
+// describe is a change in one line: what, where (the node's path), and its positions.
+pub fn (mut d Diff) describe(c Change) string {
+	return match c.kind {
+		.removed {
+			'- ${d.path(c.old)}  ${d.pos(c.old)}'
+		}
+		.added {
+			'+ ${d.path(c.new)}  ${d.pos(c.new)}'
+		}
+		.moved {
+			'> ${d.path(c.old)} -> ${d.path(c.new)}  ${d.pos(c.old)} -> ${d.pos(c.new)}'
+		}
+		.text {
+			'~ ${d.path(c.new)}: ${quoted(c.before)} -> ${quoted(c.after)}  ${d.pos(c.old)} -> ${d.pos(c.new)}'
+		}
+		.attr {
+			'@ ${d.path(c.new)}/@${c.name}: ${quoted(c.before)} -> ${quoted(c.after)}  ${d.pos(c.old)} -> ${d.pos(c.new)}'
+		}
+	}
+}
+
+// show_runs is an own text for reading: as it is, where it is one run before every child, else
+// each run after the number of children before it, in braces (`a{1}b`).
+pub fn show_runs(runs []TextRun) string {
+	if runs.len == 1 && runs[0].slot == 0 {
+		return runs[0].text
+	}
+	return runs.map(if it.slot == 0 { it.text } else { '{${it.slot}}${it.text}' }).join('')
 }
 
 fn quoted(s ?string) string {

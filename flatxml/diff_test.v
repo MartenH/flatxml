@@ -21,8 +21,13 @@ fn diff_of(a string, b string, rules string) Diff {
 	return diff_docs(doc_of('a.xml', a), doc_of('b.xml', b), rs) or { panic(err) }
 }
 
-fn lines_of(d Diff) []string {
-	return d.changes.map(it.describe())
+fn lines_of(d_ Diff) []string {
+	mut d := d_
+	mut out := []string{}
+	for k in 0 .. d.changes.len {
+		out << d.describe(d.changes[k])
+	}
+	return out
 }
 
 // short is a change as kind, the old node's path and the new node's path.
@@ -46,6 +51,23 @@ fn test_text_changes() {
 	// the text of mixed content is compared whole
 	m := diff_of('<r><p>a <i/> b</p></r>', '<r><p>a <i/> c</p></r>', '')
 	assert shorts(m) == ['text /r/p /r/p']
+}
+
+fn test_no_part_stands_in_for_another() {
+	for a, b in {
+		'<r><o selected="selected"/></r>': '<r><o/></r>'
+		'<r><a>a</a></r>':                 '<r><b>b</b></r>'
+		'<r><o p="q"/></r>':               '<r><o q="p"/></r>'
+		'<r><o p="q"></o></r>':            '<r><o>pq</o></r>'
+		'<r><a><b/></a></r>':              '<r><a>b</a></r>'
+		'<r><p>ab<i/></p></r>':            '<r><p>a<i/>b</p></r>'
+	} {
+		assert !diff_of(a, b, '').equal(), '${a} ${b}'
+	}
+	d := diff_of('<r><p>ab<i/></p></r>', '<r><p>a<i/>b</p></r>', '')
+	assert shorts(d) == ['text /r/p /r/p']
+	assert d.changes[0].after or { '' } == 'a{1}b'
+	assert d.changes[0].runs == [TextRun{0, 'a'}, TextRun{1, 'b'}]
 }
 
 fn test_attribute_changes() {
@@ -161,7 +183,7 @@ fn test_alignment() {
 struct TN {
 mut:
 	name  string
-	text  string
+	runs  []TextRun
 	attrs map[string]string
 	kids  []&TN
 }
@@ -169,7 +191,7 @@ mut:
 fn tn_of(n MNode, mut idx map[u32]&TN) &TN {
 	mut t := &TN{
 		name: n.name()
-		text: n.own_text()
+		runs: n.text_runs()
 	}
 	for a in n.attrs() {
 		t.attrs[n.m.set.tab.name(a.tag)] = a.value
@@ -216,7 +238,7 @@ fn apply(d Diff) &TN {
 	for c in d.changes {
 		mut t := idx[c.old.i] or { continue }
 		if c.kind == .text {
-			t.text = c.after or { '' }
+			t.runs = c.runs
 		} else if c.kind == .attr {
 			if v := c.after {
 				t.attrs[c.name] = v
@@ -229,7 +251,8 @@ fn apply(d Diff) &TN {
 }
 
 fn same_tn(a &TN, b &TN) bool {
-	if a.name != b.name || a.text != b.text || a.kids.len != b.kids.len || a.attrs.len != b.attrs.len {
+	if a.name != b.name || a.runs != b.runs || a.kids.len != b.kids.len
+		|| a.attrs.len != b.attrs.len {
 		return false
 	}
 	for k, v in a.attrs {
@@ -252,9 +275,16 @@ fn (t &TN) xml() string {
 	for k in names {
 		s += ' ${k}="${t.attrs[k]}"'
 	}
-	s += '>' + t.text
-	for c in t.kids {
+	s += '>'
+	// each run before the child of its slot; past the last child, after it
+	for k, c in t.kids {
+		for r in t.runs.filter(it.slot == k) {
+			s += r.text
+		}
 		s += c.xml()
+	}
+	for r in t.runs.filter(it.slot >= t.kids.len) {
+		s += r.text
 	}
 	return s + '</${t.name}>'
 }
@@ -262,7 +292,7 @@ fn (t &TN) xml() string {
 fn (t &TN) copy() &TN {
 	return &TN{
 		name:  t.name
-		text:  t.text
+		runs:  t.runs.clone()
 		attrs: t.attrs.clone()
 		kids:  t.kids.map(it.copy())
 	}
@@ -282,7 +312,7 @@ fn gen_tree(mut r XRng, depth int) &TN {
 	}
 	n := if depth < 3 { r.intn(5) } else { 0 }
 	if n == 0 && r.intn(2) == 0 {
-		t.text = 't${r.intn(4)}'
+		t.runs = [TextRun{0, 't${r.intn(4)}'}]
 	}
 	for _ in 0 .. n {
 		t.kids << gen_tree(mut r, depth + 1)
@@ -321,9 +351,8 @@ fn mutate(mut r XRng, mut t TN) {
 	mut p := parents[k]
 	match r.intn(6) {
 		0 {
-			if n.kids.len == 0 {
-				n.text = 'e${r.intn(9)}'
-			}
+			// a text, alone or beside the children, anywhere among them
+			n.runs = [TextRun{r.intn(n.kids.len + 1), 'e${r.intn(9)}'}]
 		}
 		1 {
 			n.attrs['x'] = 'e${r.intn(9)}'
@@ -368,7 +397,10 @@ fn test_a_diff_applied_to_the_old_document_gives_the_new_one() {
 				max_d: max_d
 			) or { panic(err) }
 			got := apply(d)
-			assert same_tn(got, b), 'round ${round}, max_d ${max_d}\n${a.xml()}\n${b.xml()}\n${got.xml()}\n${lines_of(d).join('\n')}'
+			// the new document as read: text runs written side by side read as one
+			mut nidx := map[u32]&TN{}
+			want := tn_of(d.new.root(), mut nidx)
+			assert same_tn(got, want), 'round ${round}, max_d ${max_d}\n${a.xml()}\n${b.xml()}\n${got.xml()}\n${lines_of(d).join('\n')}'
 			changes += d.changes.len
 		}
 	}

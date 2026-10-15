@@ -61,21 +61,27 @@ annotations are kept for that), but none is needed.
    identity: keyed ones by key, single ones by name. The rest are aligned in order: a longest
    common subsequence of their subtrees (Myers' algorithm, after the common start and end are
    taken off), then, between the subtrees that align, children of one name paired in order.
-   Past a bound on the differences in one list (1,000), the rest of it is matched greedily, so
-   no list costs quadratic time. Every node's subtree is hashed once (its name, own text,
-   attributes in any order, and children's hashes in order; the two views on two threads),
-   and a pair whose hashes agree is equal and not entered. Of the matched children, those off
+   Myers keeps, round by round, only the diagonals that round can reach (memory in the square
+   of the differences, not their product with the list), and past a bound on the differences
+   in one list (1,000) the rest of it is matched greedily, each value's places in a queue, and
+   names are paired the same way, so no list costs quadratic time. Every node's subtree is
+   hashed once (its name, its own text run by run with each run's place among the children,
+   its attributes, each name with its value and in any order, and its children's hashes in
+   order, each part from a seed of its own so no part can stand in for another; the two views
+   on two threads), and a pair whose hashes agree is equal and not entered. Of the matched children, those off
    a longest increasing run of their old places are moved, and a removed subtree equal to an
    added one, anywhere, is moved too. A `Change` is removed, added, moved, text or attribute
    changed, naming the node in each view (every fragment of it, so every file and line).
-   Text compared is a node's own text (`own_text`: beside child elements, the text runs
-   joined; a child's text is the child's). Names are compared as written.
+   Text compared is a node's own text, run by run (`text_runs`: beside child elements, each run
+   with the number of children before it; a child's text is the child's), so text that moves
+   among the children is a change. Names are compared as written.
 
    A change carries what applying it needs: an added or moved node names the node of the old
    view it goes under and its index among the new parent's children. Applied to the old view,
    remove every removed node and lift out every moved one, then, parent by parent, put each
    added or moved node at its index, lowest first: the nodes that stay are already in their
-   new order, so each index is right when it is used. Then set the texts and attributes. A
+   new order, so each index is right when it is used. Then set the attributes, and each changed
+   text's runs, which a text change carries, in their slots among the new children. A
    test applies diffs this way to a tree model and gets the new document every time. Step 5
    does it with edits over the document's bytes, written back to the files.
 5. **Merged view** (built). `DocSet.merge(rules)` reads every document of a set as one: the
@@ -173,9 +179,11 @@ Round trips, which need no oracle:
    files differ, 431 lines by `diff -r`) compare as 131 changes with the rules (3 removed, 3
    added, 5 texts, 120 attributes), read and merged in 60 ms and compared in 15 ms. The 560
    files against a copy with 267 texts changed: 268 changes without rules (266 texts; one, in a
-   list of equal values, aligned as a removal and an addition), compared in 0.19 s, of which
-   hashing both sides' 1.78M nodes is 0.16 s; with the rules, a changed key is a removal and an
-   addition, and a key shared by fragments of one node in several files splits it.
+   list of equal values, aligned as a removal and an addition), compared in about 0.2 s, of
+   which hashing both sides' 1.78M nodes is 0.18–0.2 s; with the rules, a changed key is a
+   removal and an addition, and a key shared by fragments of one node in several files splits
+   it. Lists that defeat the alignment stay linear: 50,000 siblings, none equal on the other
+   side, compare in 40–75 ms, and 15,000 changes among 30,000 siblings print in 50 ms in all.
 5. **Edits** (design 6), the write of an edited document, and `flatxml apply`: a diff applied to
    its old document gives the new one; edits on a merged view, written back to their own files.
 6. **Three-way merge**: two changed versions of one base.
