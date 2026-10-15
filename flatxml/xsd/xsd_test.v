@@ -308,7 +308,7 @@ fn test_appinfo_on_attribute_references_names_the_declaration() {
 	// an attribute group: its own uses first, as written, then those of the groups it references
 	a := s.attribute_group_named(tns, 'A')?
 	b := s.attribute_group_named(tns, 'B')?
-	groups := s.attribute_groups()
+	groups := s.attribute_groups
 	assert s.qname(groups[a].name) == '{urn:test}A'
 	assert groups[a].own == 2
 	assert groups[a].uses.map(s.qname(s.attributes[it.decl].name)) == ['local', '{urn:test}g', 'b']
@@ -347,7 +347,7 @@ fn test_a_group_reference_keeps_the_group() {
 	gi := s.group_named(tns, 'G')?
 	hi := s.group_named(tns, 'H')?
 	assert s.group_named(tns, 'Z') == none
-	groups := s.groups()
+	groups := s.groups
 	assert groups.len == 2
 	assert s.qname(groups[gi].name) == '{urn:test}G' && s.qname(groups[hi].name) == '{urn:test}H'
 	x := s.complex_type_named(tns, 'X')?
@@ -362,6 +362,20 @@ fn test_a_group_reference_keeps_the_group() {
 	inner := s.particle_children(groups[hi].root)
 	assert inner.map(s.particles[it].group) == [no_group, gi]
 	assert s.particles[s.complex_types[x].particle].group == no_group
+	// a group's annotation is filed under the group, as an attribute group's is
+	n := compile('<xs:element name="a" type="xs:string"/><xs:group name="G"><xs:annotation><xs:appinfo>g</xs:appinfo></xs:annotation><xs:sequence><xs:element ref="t:a"/></xs:sequence></xs:group>
+<xs:attributeGroup name="A"><xs:annotation><xs:appinfo>ag</xs:appinfo></xs:annotation></xs:attributeGroup>')!
+	assert n.appinfo_of(.group, n.group_named(tns, 'G')?, 0).map(it.text) == ['g']
+	assert n.appinfo_of(.attribute_group, n.attribute_group_named(tns, 'A')?, 0).map(it.text) == ['ag']
+}
+
+fn test_an_attribute_group_that_includes_itself_is_refused_used_or_not() {
+	path := write_schema('cycle.xsd', head + '\n<xs:attributeGroup name="A"><xs:attributeGroup ref="t:B"/></xs:attributeGroup>\n<xs:attributeGroup name="B"><xs:attributeGroup ref="t:A"/></xs:attributeGroup></xs:schema>')
+	load(path) or {
+		assert err.msg() == '${path}:2:1: attribute group {urn:test}A includes itself'
+		return
+	}
+	assert false, 'compiled'
 }
 
 fn test_appinfo_has_its_position_and_an_index_by_owner() {

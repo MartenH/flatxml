@@ -3,7 +3,8 @@ module xsd
 // resolve gives every reference its target, then expands attribute groups into the complex
 // types that use them, gives a type extending another its base's content and attributes, and
 // refuses what cannot be compiled: a reference to nothing, a group that contains itself, an
-// attribute group that includes itself, a type extending itself, a type with an attribute twice.
+// attribute group that includes itself (used or not), a type extending itself, a type with an
+// attribute twice.
 fn (mut r Reader) resolve() ! {
 	xs := r.s.uri_ids[xsd_ns_uri] or { u32(0xFFFF_FFFF) }
 	// Each reference, in the order it was read.
@@ -42,22 +43,16 @@ fn (mut r Reader) resolve() ! {
 					required: p.required
 				}
 				if p.in_group {
-					r.s.agroups[p.slot].attrs[p.sub] = use
+					r.agroups[p.slot].attrs[p.sub] = use
 				} else {
 					r.s.complex_types[p.slot].attrs[p.sub] = use
 				}
-				for k in p.notes_lo .. p.notes_hi {
-					r.s.appinfo[k] = Appinfo{
-						...r.s.appinfo[k]
-						attr: decl
-					}
-				}
 			}
 			.group_ref {
-				mg := r.s.groups[p.name.key()] or {
+				mg := r.s.group_ids[p.name.key()] or {
 					return r.at(p, 'group ${r.s.qname(p.name)} is not declared')
 				}
-				g := r.s.particles[r.s.mgroups[mg].root]
+				g := r.s.particles[r.mgroups[mg].root]
 				r.s.particles[p.slot].kind = g.kind
 				r.s.particles[p.slot].term = g.term
 				r.s.particles[p.slot].count = g.count
@@ -68,11 +63,24 @@ fn (mut r Reader) resolve() ! {
 					return r.at(p, 'attribute group ${r.s.qname(p.name)} is not declared')
 				}
 				if p.in_group {
-					r.s.agroups[p.slot].refs << g
+					r.agroups[p.slot].refs << g
 				} else {
 					r.ct_agroups[p.slot] << g
 				}
 			}
+		}
+	}
+	// An annotation on an attribute reference names the declaration the reference resolved to,
+	// read while every use is still at the index it was written at.
+	for k, a in r.appinfo {
+		decl := match a.owner {
+			.attribute_use { r.s.complex_types[a.idx].attrs[a.sub].decl }
+			.group_attribute_use { r.agroups[a.idx].attrs[a.sub].decl }
+			else { continue }
+		}
+		r.appinfo[k] = Appinfo{
+			...a
+			attr: decl
 		}
 	}
 	r.check_group_cycles()!
@@ -85,7 +93,7 @@ fn (mut r Reader) resolve() ! {
 	}
 	// Each attribute group gets the attributes of the groups it references, then each complex
 	// type those of the groups it references; a use reached through two groups is one use.
-	for g in 0 .. r.s.agroups.len {
+	for g in 0 .. r.agroups.len {
 		r.flatten(u32(g))!
 	}
 	for ct in 0 .. r.s.complex_types.len {
@@ -163,20 +171,21 @@ fn (r &Reader) lookup_type(p Pending, xs u32, complex_ok bool) !TypeRef {
 
 // flatten is the attribute uses of attribute group g with the groups it references expanded.
 fn (mut r Reader) flatten(g u32) ![]AttrUse {
-	if r.s.agroups[g].done {
-		return r.s.agroups[g].attrs
+	if r.agroups[g].done {
+		return r.agroups[g].attrs
 	}
-	if r.s.agroups[g].busy {
-		return error('attribute group ${r.agroup_name(g)} includes itself')
+	if r.agroups[g].busy {
+		ag := r.agroups[g]
+		return error('${r.docs[ag.doc].pos(ag.node)}: attribute group ${r.agroup_name(g)} includes itself')
 	}
-	r.s.agroups[g].busy = true
-	mut attrs := r.s.agroups[g].attrs.clone()
-	for sub in r.s.agroups[g].refs {
+	r.agroups[g].busy = true
+	mut attrs := r.agroups[g].attrs.clone()
+	for sub in r.agroups[g].refs {
 		attrs = union_of(attrs, r.flatten(sub)!)
 	}
-	r.s.agroups[g].attrs = attrs
-	r.s.agroups[g].busy = false
-	r.s.agroups[g].done = true
+	r.agroups[g].attrs = attrs
+	r.agroups[g].busy = false
+	r.agroups[g].done = true
 	return attrs
 }
 
@@ -294,7 +303,7 @@ fn (r &Reader) st_name(st u32) string {
 }
 
 fn (r &Reader) agroup_name(g u32) string {
-	return r.s.qname(r.s.agroups[g].name)
+	return r.s.qname(r.agroups[g].name)
 }
 
 // check_group_cycles refuses a content model that contains itself through group references,

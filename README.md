@@ -109,7 +109,7 @@ it is written (`appinfo_pos`), and for an attribute or a reference to one, the a
 declaration it is about; `appinfo_of` finds an owner's entries. Expanding a group keeps its
 identity: a group reference becomes the group's sequence or choice and names the group it
 includes (`Particle.group`), and the named model groups and attribute groups can be read
-(`groups()`, `attribute_groups()`).
+(`groups`, `attribute_groups`; these and `appinfo` are read-only).
 
 `xsd.validate(mut doc, schema)` checks a document against a compiled schema. It gives each
 element the declaration its context names (one more array beside the nodes) and reports what the
@@ -134,7 +134,8 @@ When a schema compiles, its facets are checked too: an enumeration value must be
 type, `maxLength` must apply to the type and not exceed its base's, and `whiteSpace` must not
 loosen its base's. So are its content models: deterministic (Unique Particle Attribution: a child
 is matched by one particle, without looking ahead), and one type for elements of one name
-(Element Declarations Consistent).
+(Element Declarations Consistent). An attribute group may not include itself, whether a type
+uses it or not.
 
 **Patterns** (`xsd.compile_pattern`) are XSD regular expressions run by a linear-time engine:
 a pattern compiles to an NFA, which validation runs as a DFA built lazily as values meet it (a
