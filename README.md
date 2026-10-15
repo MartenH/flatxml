@@ -75,6 +75,28 @@ Namespaces in XML 1.0: unbound prefixes, names that are not qualified names, mis
 reserved `xml` and `xmlns` prefixes and namespaces, undeclared prefixes, and attributes with the
 same expanded name.
 
+**Writing.** A document is written back by copying its source: a node's bytes run from its `<` to
+the end of its end tag, and the bytes between nodes (comments, processing instructions, the
+whitespace the tree drops, the prolog before the root and whatever follows it) are copied as they
+are, so a document written unchanged is its file, byte for byte. Only a node's start is stored;
+its end is found when it is asked for, by reading on from the end of its last descendant to its
+end tag, so the parse and the 28 bytes a node takes are unchanged. What is not copied is written
+from the tree's parts: names as interned, values decoded and escaped again for where they go
+(text, an attribute value between the quote that needs fewer escapes, CDATA), and an element
+written on its own (`outer_xml`) carries the namespace declarations in scope where it was. Edits
+will be written the same way: copied around what changed ([docs/documents.md](docs/documents.md)).
+
+```v
+import flatxml
+
+mut doc := flatxml.parse_file('model.xml')!
+doc.write_file('copy.xml')! // byte for byte; over its own file too
+item := doc.root_node().child('items').child('item')
+println(doc.subtree_bytes(item.i)) // the element as the file has it
+println(doc.outer_xml(item.i)) // written from the tree, with its namespace declarations
+println('<v>${flatxml.escape_text('a < b')}</v>')
+```
+
 **XML Schema.** `flatxml.xsd` compiles schema documents into flat tables the same way: components
 in arrays, referring to each other by index. `xsd.load(paths...)` reads the documents and what
 they import, resolves every reference, expands groups and attribute groups, and gives a type
@@ -139,6 +161,14 @@ Results marked *earlier* predate this repository; the parser has not changed sin
   whitespace), `namespaces.xml` (scopes, redeclaration, an undeclared default, reserved prefixes)
   and one file per namespace error, each rejected by both. *Earlier:* identical on generated
   files of 20 MB and 100 MB and on a 142 MB merged one.
+- **Writing back**: written unchanged, every file is itself byte for byte, both copied whole and
+  node by node (each node located on its own, the bytes between nodes copied), and written from
+  the tree it parses to the same tree, on `testdata/`, generated documents up to 500 MB, 560
+  real-world configuration files (169 MB) and 34,187 other XML files found on one machine
+  (224 MB). A unit test covers each construct
+  that has to survive (CDATA, comments and processing instructions between and inside elements,
+  a DOCTYPE with an internal subset, CRLF, references, `<a/>` beside `<a></a>`, both quotes,
+  whitespace the tree drops, what follows the root, a byte order mark).
 - **Mutation fuzzing** against expat (`tools/fuzz_vs_expat.py`): random edits, plus namespace
   edits that keep a document well-formed (renaming a prefix, dropping a declaration); 24,000 cases
   over six seeds, with and without namespaces. No crash, no valid document refused, no tree
@@ -178,8 +208,9 @@ each is good at, and what it is not:
 - **flatxml** builds a read-only tree of the whole document, navigable in every direction, in
   28 bytes a node, with every name interned and text left in the file until it is read, and
   validates against a schema in a fraction of the parse. Namespaces and XSD validation are layers
-  over that tree, each opt-in. It is not good at: changing a document (the tree is read-only;
-  editing is a planned layer, [docs/documents.md](docs/documents.md)), documents that do not fit in memory or exceed 4 GiB (it maps the
+  over that tree, each opt-in. It writes a document back byte for byte. It is not good at:
+  changing a document (the tree is read-only; editing is a planned layer,
+  [docs/documents.md](docs/documents.md)), documents that do not fit in memory or exceed 4 GiB (it maps the
   whole file; there is no streaming mode), XML 1.1, DTDs (skipped), and names and UTF-8 (not
   checked). Its XSD support is a measured subset. It is a V library.
 - **quick-xml** (Rust) is a pull parser: it hands out events and keeps no tree, so it streams a
@@ -307,8 +338,9 @@ Linux too):
 export V_MACOS_V3_NO_FALLBACK=1
 v test .                                       # unit tests
 scripts/check_readme_examples.sh               # the README's examples type-check
-mkdir -p bin && v -o bin/flatxml cmd/cli       # flatxml dump | stats | set | schema | validate
+mkdir -p bin && v -o bin/flatxml cmd/cli       # flatxml dump | stats | set | write | roundtrip | schema | validate
 v -prod -o bin/genxml cmd/genxml               # genxml <out.xml> <megabytes>
+bin/flatxml roundtrip testdata                 # written back, each file is itself (--nodes, --rewrite)
 tools/check_vs_expat.py bin/flatxml testdata   # identical to expat, element for element
 tools/check_vs_expat.py --ns bin/flatxml testdata            # ... with namespaces resolved
 tools/fuzz_vs_expat.py --ns --count 4000 bin/flatxml testdata/*.xml   # random edits
@@ -323,7 +355,7 @@ scripts/fetch_xsts.sh /tmp/xsts && tools/xsts.py bin/flatxml /tmp/xsts   # W3C s
 
 CI (`.github/workflows/ci.yml`) builds the pinned V (`.v-version`, and its C bootstrap at
 `.vc-version`), runs the unit tests, checks `testdata/` and an 8 MB generated document against
-expat in both modes, fuzzes 500 mutations in each, validates the generated document against
+expat in both modes and writes them back (each is itself, in every write mode), fuzzes 500 mutations in each, validates the generated document against
 `testdata/inventory.xsd`, and runs the W3C schema and instance tests (fetched at the commit
 `.xsts-version` names, without the NIST datatype set).
 

@@ -8,6 +8,12 @@
 //   flatxml set [--ns] [--jobs N] [--ext EXT] <file|dir>...   read many files as one set (a
 //                                  directory: every file below it ending in EXT, default .xml)
 //                                  and print what they hold and how long it took
+//   flatxml write [--nodes|--rewrite] <in> <out>   write a document back as XML (to stdout for
+//                                  `-`): its bytes (the default), node by node, or every node
+//                                  from the tree
+//   flatxml roundtrip [--nodes|--rewrite] [--ext EXT] <file|dir>...   write each document and
+//                                  compare: the same bytes as the file, or with --rewrite the
+//                                  same tree; prints the files that differ and a count
 //   flatxml schema <xsd>...        compile an XML Schema and print what it holds
 //   flatxml schema --batch [--times]   compile one schema per stdin line (tab-separated
 //                                  documents), answering `ok` or `error<TAB>message` per line;
@@ -23,6 +29,7 @@ module main
 
 import flatxml
 import flatxml.xsd
+import io
 import os
 import strings
 import time
@@ -32,6 +39,8 @@ const usage = 'usage:
                                 --ns names elements and attributes {uri}local
   flatxml stats [--parse-only] <file>...   size, node counts, parse and namespace times
   flatxml set [--ns] [--jobs N] [--ext EXT] <file|dir>...   many files as one set, timed
+  flatxml write [--nodes|--rewrite] <in> <out|->   write a document back as XML
+  flatxml roundtrip [--nodes|--rewrite] [--ext EXT] <file|dir>...   write and compare each
   flatxml schema <xsd>...       compile an XML Schema (and what it imports), print what it holds
   flatxml schema --batch        one schema per stdin line (documents tab-separated): ok | error<TAB>why
   flatxml validate <xsd> <doc>...  check documents against a schema
@@ -85,6 +94,14 @@ fn main() {
 		}
 		'set' {
 			load_set(args[1..])
+		}
+		'write' {
+			write_doc(args[1..])
+		}
+		'roundtrip' {
+			if !round_trip(args[1..]) {
+				exit(1)
+			}
 		}
 		'stats' {
 			parse_only := args[1] == '--parse-only'
@@ -335,6 +352,14 @@ fn dump_events(path string, ns bool) {
 		}
 	}
 	mut out := os.stdout()
+	dump_tree(d, ns, mut out) or {
+		eprintln('flatxml: ${err}')
+		exit(1)
+	}
+}
+
+// dump_tree writes the lines of `flatxml dump` for d to out.
+fn dump_tree(d &flatxml.Doc, ns bool, mut out io.Writer) ! {
 	mut sb := strings.new_builder(1 << 20)
 	mut depth := []u32{len: d.len()}
 	mut run := strings.new_builder(256)
@@ -375,13 +400,22 @@ fn dump_events(path string, ns bool) {
 			flush_run(mut sb, mut run, depth[k])
 		}
 		if sb.len > 1 << 20 {
-			write_or_exit(mut out, sb.str())
+			write_all(mut out, sb)!
+			sb.go_back_to(0)
 		}
 	}
 	if run.len > 0 {
 		flush_run(mut sb, mut run, depth[run_parent])
 	}
-	write_or_exit(mut out, sb.str())
+	write_all(mut out, sb)!
+}
+
+// write_all writes all of b, or fails: a truncated dump must not look like a whole one.
+fn write_all(mut out io.Writer, b []u8) ! {
+	mut done := 0
+	for done < b.len {
+		done += out.write(b[done..])!
+	}
 }
 
 // one_line is s as one line of a batch answer: every control character a space, so a quoted value
@@ -489,4 +523,127 @@ fn load_set(args []string) {
 	if errs.len > 0 {
 		exit(1)
 	}
+}
+
+// write_mode reads a leading `--nodes` or `--rewrite` off args.
+fn write_mode(args []string) (flatxml.WriteMode, []string) {
+	if args.len > 0 && args[0] == '--nodes' {
+		return .nodes, args[1..]
+	}
+	if args.len > 0 && args[0] == '--rewrite' {
+		return .rewrite, args[1..]
+	}
+	return .verbatim, args
+}
+
+fn write_doc(args []string) {
+	mode, rest := write_mode(args)
+	if rest.len != 2 {
+		eprintln(usage)
+		exit(2)
+	}
+	mut d := flatxml.parse_file(rest[0]) or {
+		eprintln(err)
+		exit(1)
+	}
+	if rest[1] == '-' {
+		mut out := os.stdout()
+		d.write(mut out, mode: mode) or {
+			eprintln('flatxml: ${err}')
+			exit(1)
+		}
+	} else {
+		d.write_file(rest[1], mode: mode) or {
+			eprintln('flatxml: ${rest[1]}: ${err}')
+			exit(1)
+		}
+	}
+	d.free()
+}
+
+// round_trip writes every document named (a directory: every file below it ending in EXT,
+// default .xml) and compares the result with it, printing each one that differs or does not
+// parse; false when there is one.
+fn round_trip(args []string) bool {
+	mode, mut rest := write_mode(args)
+	mut ext := '.xml'
+	if rest.len > 1 && rest[0] == '--ext' {
+		ext = rest[1]
+		rest = rest[2..].clone()
+	}
+	if rest.len == 0 {
+		eprintln(usage)
+		exit(2)
+	}
+	mut files := []string{}
+	for p in rest {
+		if os.is_dir(p) {
+			mut found := os.walk_ext(p, ext)
+			found.sort()
+			files << found
+		} else {
+			files << p
+		}
+	}
+	mut same := 0
+	mut bytes := i64(0)
+	mut bad := []string{}
+	mut write_time := time.Duration(0)
+	for f in files {
+		mut d := flatxml.parse_file(f) or {
+			bad << 'does not parse: ${one_line(err.msg())}'
+			continue
+		}
+		mut out := strings.new_builder(d.src_len)
+		sw := time.new_stopwatch()
+		d.write(mut out, mode: mode) or {
+			bad << '${f}: ${err}'
+			d.free()
+			continue
+		}
+		write_time += sw.elapsed()
+		bytes += d.src_len
+		if mode != .rewrite {
+			if out.len == d.src_len && unsafe { C.memcmp(out.data, d.src, d.src_len) } == 0 {
+				same++
+			} else {
+				bad << '${f}: different bytes'
+			}
+		} else if diff := tree_difference(d, out.str()) {
+			bad << '${f}: ${diff}'
+		} else {
+			same++
+		}
+		d.free()
+	}
+	for b in bad {
+		println(b)
+	}
+	what := if mode == .rewrite { 'the same tree' } else { 'identical' }
+	println('${same} of ${files.len} files ${what} (${mb(bytes)} written in ${ms(write_time)})')
+	return bad.len == 0
+}
+
+// tree_difference is why the document xml does not read as the same tree as d, if it does not:
+// compared as `flatxml dump` writes them.
+fn tree_difference(d &flatxml.Doc, xml string) ?string {
+	mut again := flatxml.parse_string(xml) or { return 'written, it does not parse: ${err}' }
+	mut a := strings.new_builder(1 << 20)
+	mut b := strings.new_builder(1 << 20)
+	dump_tree(d, false, mut a) or { return err.msg() }
+	dump_tree(again, false, mut b) or { return err.msg() }
+	ta := a.str()
+	tb := b.str()
+	again.free()
+	if ta == tb {
+		return none
+	}
+	la := ta.split_into_lines()
+	lb := tb.split_into_lines()
+	for k in 0 .. la.len {
+		if k >= lb.len || la[k] != lb[k] {
+			return 'a different tree at dump line ${k + 1}'
+		}
+	}
+	return 'a different tree after dump line ${la.len}'
 }

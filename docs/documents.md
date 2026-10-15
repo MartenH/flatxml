@@ -89,8 +89,23 @@ Round trips, which need no oracle:
    and every element of one name 8–10 ms. The README's examples type-check in CI
    (`scripts/check_readme_examples.sh`). The library moved into `flatxml/`, so the checkout no
    longer has to be named `flatxml`.
-2. **Writing** (design 7, unedited): the byte-for-byte round trip, which every later step relies
-   on.
+2. **Writing** (design 7, unedited; done): the byte-for-byte round trip, which every later step
+   relies on. A node's bytes run from its `<` to the end of its end tag, and the bytes between
+   nodes are copied as they are. The end is found when asked for (from the end of the node's last
+   descendant, read on to its end tag) rather than stored: on the 500 MB benchmark an array
+   filled at parse time made the parse no faster or slower than the noise (best of 15, 1,060 ms
+   against 1,027 ms) but cost 4 bytes a node (52 MB, 28 to 32 bytes a node), while finding the end
+   of every one of its 13M nodes on demand takes 150–190 ms, and a write asks it only of the nodes
+   it copies or walks. Written whole, the 500 MB document takes 0.3–0.45 s; node by node (each
+   node located on its own, adjacent copies joined into one) 0.67 s; every node from the tree
+   1.4–1.6 s. Written unchanged, every file is itself, byte for byte, both whole and node by node,
+   and written from the tree it reads as the same tree: `testdata/`, generated documents up to
+   500 MB, 560 real-world files (169 MB), 34,187 other XML files (224 MB), and 10,809 mutations of
+   the test documents that parse. The emitter takes a plan that says, node by node, whether to
+   copy it whole, copy its tags and walk its children, or write it anew, which is where edits
+   plug in; escaping (text, attribute values with the quote that needs fewer escapes, CDATA) and
+   an element written from the tree's parts with the namespace declarations in scope are in
+   place for them. `flatxml write` and `flatxml roundtrip` run it from the command line.
 3. **Rules and diff** (design 3, 4), and `flatxml diff`: two files or two directories, the changes
    with their positions.
 4. **Edits** (design 6), the write of an edited document, and `flatxml apply`: a diff applied to

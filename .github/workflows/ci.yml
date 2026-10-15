@@ -45,6 +45,12 @@ jobs:
           tools/check_vs_expat.py bin/flatxml testdata "$RUNNER_TEMP/gen_8.xml"
           tools/check_vs_expat.py --ns bin/flatxml testdata "$RUNNER_TEMP/gen_8.xml"
 
+      - name: Written back, each document is itself
+        run: |
+          bin/flatxml roundtrip testdata "$RUNNER_TEMP/gen_8.xml"
+          bin/flatxml roundtrip --nodes testdata "$RUNNER_TEMP/gen_8.xml"
+          bin/flatxml roundtrip --rewrite testdata "$RUNNER_TEMP/gen_8.xml"
+
       - name: A generated document is valid against its schema
         run: bin/flatxml validate testdata/inventory.xsd "$RUNNER_TEMP/gen_8.xml"
 
