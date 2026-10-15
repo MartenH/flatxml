@@ -144,9 +144,12 @@ this element" before "is it in the right place".
    617 of them an invalid pattern (step 4) and 46 an enumeration value outside its base type
    (step 4). A missing type is an error when the schema is compiled, where XSD 1.0 allows it
    until the declaration is used: a documented divergence.
-3. **Typing pass** (design 3). Give each element its declaration by context (parent type and
-   child name), without checking order. Report undeclared elements and attributes. On its own
+3. **Typing pass** (design 3, done). Give each element its declaration by context (parent type
+   and child name), without checking order. Report undeclared elements and attributes. On its own
    this already answers "is this element allowed here", and "what kind of element is this".
+   On the W3C suite no valid document is reported (6,461 instance tests); 2,678 invalid ones pass
+   because their error is in a value or the order of children. 463 real-world files agree with
+   libxml2 on every verdict. About 0.5 s on the 500 MB benchmark, namespaces included.
 4. **Simple types** (design 5). Whitespace, enumeration, `maxLength`, the five base types, and the
    pattern engine. The engine is tested pattern by pattern against lxml, with a one-element schema
    per pattern.

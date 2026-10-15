@@ -1,0 +1,343 @@
+module xsd
+
+import flatxml
+
+pub const xsi_ns_uri = 'http://www.w3.org/2001/XMLSchema-instance'
+
+pub enum FindingKind {
+	undeclared_element   // no declaration for the element where it is (or no global one, for the root)
+	undeclared_attribute // the element's type declares no such attribute
+	missing_attribute    // a required attribute is not there
+	text_not_allowed     // text in element-only or empty content
+	children_not_allowed // child elements in simple or empty content
+	abstract_type        // the element's type is abstract
+	unsupported          // the document uses something this validator does not support (xsi:type)
+}
+
+// Finding is one way the document does not match the schema, at node `node`.
+pub struct Finding {
+pub:
+	node u32
+	kind FindingKind
+	msg  string
+}
+
+// Validation is a document checked against a schema: the declaration each element matched, one
+// array beside the document's nodes, and what does not match.
+pub struct Validation {
+pub mut:
+	decl     []u32 // per node: element declaration + 1; 0 for a text node or an element not matched
+	findings []Finding
+	total    int // findings found; at most Options.max_findings are kept
+}
+
+@[params]
+pub struct Options {
+pub:
+	max_findings int = 1000
+}
+
+// declared is the element declaration node i matched.
+pub fn (v &Validation) declared(i u32) ?u32 {
+	if int(i) >= v.decl.len || v.decl[i] == 0 {
+		return none
+	}
+	return v.decl[i] - 1
+}
+
+// valid reports whether nothing was found.
+pub fn (v &Validation) valid() bool {
+	return v.total == 0
+}
+
+// What a complex type allows, gathered once per type the document uses.
+struct TypeIndex {
+mut:
+	children map[u64]u32 // child element name -> declaration
+	attrs    map[u64]AttrUse
+	required []u32 // declarations of the required attributes
+}
+
+struct Validator {
+mut:
+	d       &flatxml.Doc
+	s       &Schema
+	opts    Options
+	v       Validation
+	ns_map  []u32 // document namespace id -> schema namespace id (no_match when the schema has none)
+	name_map []u32 // document name id -> schema name id
+	index   map[u32]&TypeIndex
+	xsi     u32 // the document's id for the xsi namespace
+}
+
+const no_match = u32(0xFFFF_FFFF)
+
+// validate checks document d against schema s: each element gets the declaration its context
+// gives it, and every element, attribute and run of text the schema does not allow is a finding.
+// Namespaces are resolved first; a document that is not namespace-well-formed is an error.
+// Values and the order and number of children are not checked yet (steps 4 and 5 of the plan).
+pub fn validate(mut d flatxml.Doc, s &Schema, opts Options) !Validation {
+	d.resolve_namespaces()!
+	mut vr := Validator{
+		d:    d
+		s:    s
+		opts: opts
+		v:    Validation{
+			decl: []u32{len: d.len()}
+		}
+		xsi:  d.ns_id(xsi_ns_uri) or { no_match }
+	}
+	vr.map_names()
+	vr.walk()
+	return vr.v
+}
+
+// map_names translates the document's namespace and name ids to the schema's once, so each
+// element costs two array reads to look up.
+fn (mut vr Validator) map_names() {
+	vr.ns_map = []u32{len: vr.d.ns_uris.len, init: no_match}
+	for i, uri in vr.d.ns_uris {
+		vr.ns_map[i] = vr.s.uri_ids[uri] or { no_match }
+	}
+	vr.name_map = []u32{len: vr.d.names.len, init: no_match}
+	for i, name in vr.d.names {
+		vr.name_map[i] = vr.s.name_ids[name] or { no_match }
+	}
+}
+
+// key is element i's name as a schema key, or none when the schema has no such name.
+fn (vr &Validator) key(i u32) ?u64 {
+	ns := vr.ns_map[vr.d.ns_of(i)]
+	local := vr.name_map[vr.d.local_id(i)]
+	if ns == no_match || local == no_match {
+		return none
+	}
+	return QName{ns, local}.key()
+}
+
+fn (mut vr Validator) walk() {
+	d := vr.d
+	mut k := 1
+	// Each element in document order; an element that matches nothing is reported once and its
+	// subtree skipped, since nothing inside it can be matched either.
+	for k < d.len() {
+		i := u32(k)
+		p := d.parent[i]
+		if d.is_text(i) {
+			vr.check_text(i, p)
+			k++
+			continue
+		}
+		// xsi:type replaces the declared type, which this validator cannot follow: the subtree is
+		// not assessed, and the finding says why
+		if vr.xsi_type(i) {
+			vr.find(i, .unsupported, 'xsi:type on <${d.name(i)}> is not supported')
+			k = int(d.end[i])
+			continue
+		}
+		decl := vr.match_element(i, p) or {
+			k = int(d.end[i])
+			continue
+		}
+		vr.v.decl[i] = decl + 1
+		vr.check_element(i, decl)
+		k++
+	}
+}
+
+// located_elsewhere is the namespace of element i when the schema declares nothing in it and the
+// root's xsi:schemaLocation names a schema for it: the document expects a schema it was not given.
+fn (vr &Validator) located_elsewhere(i u32) ?string {
+	if vr.ns_map[vr.d.ns_of(i)] != no_match || vr.xsi == no_match {
+		return none
+	}
+	uri := vr.d.ns_uri(vr.d.ns_of(i))
+	root := vr.d.root()
+	lo, hi := vr.d.attr_range(root)
+	for a := lo; a < hi; a++ {
+		if vr.d.attr_ns_of(a) == vr.xsi && vr.d.attr_local_name(a) == 'schemaLocation' {
+			pairs := vr.d.attr_value(a).fields()
+			for k := 0; k + 1 < pairs.len; k += 2 {
+				if pairs[k] == uri {
+					return uri
+				}
+			}
+		}
+	}
+	return none
+}
+
+fn (vr &Validator) xsi_type(i u32) bool {
+	if vr.xsi == no_match {
+		return false
+	}
+	lo, hi := vr.d.attr_range(i)
+	for a := lo; a < hi; a++ {
+		if vr.d.attr_ns_of(a) == vr.xsi && vr.d.attr_local_name(a) == 'type' {
+			return true
+		}
+	}
+	return false
+}
+
+// match_element finds the declaration for element i under parent p, or reports why there is none.
+fn (mut vr Validator) match_element(i u32, p u32) ?u32 {
+	if p == flatxml.no_node {
+		key := vr.key(i) or { u64(0) }
+		return vr.s.global_elems[key] or {
+			if uri := vr.located_elsewhere(i) {
+				vr.find(i, .unsupported, 'the schema for ${uri} is named by xsi:schemaLocation, which is not followed')
+			} else {
+				vr.find(i, .undeclared_element, '<${vr.d.name(i)}> is not declared as a root element')
+			}
+			return none
+		}
+	}
+	pd := vr.v.decl[p] - 1
+	t := vr.s.elements[pd].typ
+	if t.kind != .complex || vr.s.complex_types[t.idx].content in [.simple, .empty] {
+		vr.find(i, .children_not_allowed, '<${vr.d.name(p)}> has no child elements, so <${vr.d.name(i)}> is not allowed')
+		return none
+	}
+	idx := vr.type_index(t.idx)
+	key := vr.key(i) or { u64(0) }
+	return idx.children[key] or {
+		vr.find(i, .undeclared_element, '<${vr.d.name(i)}> is not allowed in <${vr.d.name(p)}>')
+		return none
+	}
+}
+
+// check_element checks what element i holds directly: its own text and its attributes.
+fn (mut vr Validator) check_element(i u32, decl u32) {
+	t := vr.s.elements[decl].typ
+	if t.kind == .complex {
+		ct := vr.s.complex_types[t.idx]
+		if ct.abstract {
+			vr.find(i, .abstract_type, '<${vr.d.name(i)}> has an abstract type')
+		}
+		if vr.d.text_len[i] != 0 && ct.content in [.element_only, .empty]
+			&& vr.d.text(i).trim_space() != '' {
+			vr.find(i, .text_not_allowed, '<${vr.d.name(i)}> has no text content')
+		}
+	}
+	vr.check_attrs(i, t)
+}
+
+// check_text checks a text node of mixed content (beside child elements) under element p.
+fn (mut vr Validator) check_text(i u32, p u32) {
+	if vr.v.decl[p] == 0 {
+		return
+	}
+	t := vr.s.elements[vr.v.decl[p] - 1].typ
+	if t.kind == .complex && vr.s.complex_types[t.idx].content != .mixed
+		&& vr.d.text(i).trim_space() != '' {
+		vr.find(i, .text_not_allowed, 'text is not allowed in <${vr.d.name(p)}>')
+	}
+}
+
+fn (mut vr Validator) check_attrs(i u32, t TypeRef) {
+	d := vr.d
+	lo, hi := d.attr_range(i)
+	mut idx := &TypeIndex(unsafe { nil })
+	if t.kind == .complex {
+		idx = vr.type_index(t.idx)
+	}
+	mut seen := 0
+	// Each attribute written on the element; namespace declarations are not attributes here.
+	for a := lo; a < hi; a++ {
+		if d.is_ns_decl(a) {
+			continue
+		}
+		ns := d.attr_ns_of(a)
+		if ns != flatxml.no_ns && ns == vr.xsi {
+			local := d.attr_local_name(a)
+			if local == 'nil' {
+				vr.find(i, .unsupported, 'xsi:nil on <${d.name(i)}> is not supported')
+			} else if local !in ['schemaLocation', 'noNamespaceSchemaLocation'] {
+				vr.find(i, .undeclared_attribute, 'attribute ${d.attr_name(a)} is not an XSD instance attribute')
+			}
+			continue
+		}
+		snm := vr.ns_map[ns]
+		sloc := vr.name_map[d.attr_local_id(a)]
+		key := if snm == no_match || sloc == no_match { u64(0) } else { QName{snm, sloc}.key() }
+		if isnil(idx) || key !in idx.attrs {
+			vr.find(i, .undeclared_attribute, 'attribute ${d.attr_name(a)} is not allowed on <${d.name(i)}>')
+			continue
+		}
+		if idx.attrs[key].required {
+			seen++
+		}
+	}
+	if !isnil(idx) && seen < idx.required.len {
+		vr.report_missing(i, idx)
+	}
+}
+
+// report_missing names each required attribute of element i that is not there.
+fn (mut vr Validator) report_missing(i u32, idx &TypeIndex) {
+	d := vr.d
+	lo, hi := d.attr_range(i)
+	for decl in idx.required {
+		name := vr.s.attributes[decl].name
+		mut found := false
+		for a := lo; a < hi; a++ {
+			if !d.is_ns_decl(a) && vr.ns_map[d.attr_ns_of(a)] == name.ns
+				&& vr.name_map[d.attr_local_id(a)] == name.local {
+				found = true
+				break
+			}
+		}
+		if !found {
+			vr.find(i, .missing_attribute, '<${d.name(i)}> needs attribute ${vr.s.qname(name)}')
+		}
+	}
+}
+
+// type_index is what complex type ct allows, gathered on first use: the element declarations in
+// its content model by name, and its attributes.
+fn (mut vr Validator) type_index(ct u32) &TypeIndex {
+	if idx := vr.index[ct] {
+		return idx
+	}
+	mut idx := &TypeIndex{}
+	vr.collect(vr.s.complex_types[ct].particle, mut idx)
+	for u in vr.s.complex_types[ct].attrs {
+		idx.attrs[vr.s.attributes[u.decl].name.key()] = u
+		if u.required {
+			idx.required << u.decl
+		}
+	}
+	vr.index[ct] = idx
+	return idx
+}
+
+// collect adds the element declarations under particle p; when two share a name, the first wins
+// (XSD requires them to have the same type).
+fn (vr &Validator) collect(p u32, mut idx TypeIndex) {
+	if p == no_particle {
+		return
+	}
+	pt := vr.s.particles[p]
+	if pt.kind == .element {
+		key := vr.s.elements[pt.term].name.key()
+		if key !in idx.children {
+			idx.children[key] = pt.term
+		}
+		return
+	}
+	for ch in vr.s.particle_children(p) {
+		vr.collect(ch, mut idx)
+	}
+}
+
+fn (mut vr Validator) find(i u32, kind FindingKind, msg string) {
+	vr.v.total++
+	if vr.v.findings.len < vr.opts.max_findings {
+		vr.v.findings << Finding{
+			node: i
+			kind: kind
+			msg:  msg
+		}
+	}
+}

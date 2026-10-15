@@ -7,6 +7,10 @@
 //   flatxml schema <xsd>...        compile an XML Schema and print what it holds
 //   flatxml schema --batch         compile one schema per stdin line (tab-separated documents),
 //                                  answering `ok` or `error<TAB>message` per line
+//   flatxml validate <xsd> <doc>...   check documents against a schema, one line per finding
+//   flatxml validate --batch       one `document<TAB>schema documents...` per stdin line,
+//                                  answering `valid`, `invalid<TAB>kind<TAB>first finding`, or
+//                                  `error<TAB>message`
 module main
 
 import flatxml
@@ -20,7 +24,9 @@ const usage = 'usage:
                                 --ns names elements and attributes {uri}local
   flatxml stats <file>...       size, node counts, parse and namespace times of each file
   flatxml schema <xsd>...       compile an XML Schema (and what it imports), print what it holds
-  flatxml schema --batch        one schema per stdin line (documents tab-separated): ok | error<TAB>why'
+  flatxml schema --batch        one schema per stdin line (documents tab-separated): ok | error<TAB>why
+  flatxml validate <xsd> <doc>...  check documents against a schema
+  flatxml validate --batch      one `document<TAB>schema...` per stdin line'
 
 fn main() {
 	args := os.args[1..]
@@ -44,6 +50,19 @@ fn main() {
 			}
 			print_schema(args[1..]) or {
 				eprintln(err)
+				exit(1)
+			}
+		}
+		'validate' {
+			if args[1] == '--batch' {
+				validate_batch()
+				return
+			}
+			if args.len < 3 {
+				eprintln(usage)
+				exit(2)
+			}
+			if !validate_files(args[1], args[2..]) {
 				exit(1)
 			}
 		}
@@ -84,6 +103,86 @@ fn schema_batch() {
 		write_or_exit(mut out, answer)
 		out.flush()
 	}
+}
+
+// validate_files checks each document against the schema and prints its findings; false when
+// any document is invalid or cannot be read.
+fn validate_files(schema string, docs []string) bool {
+	s := xsd.load(schema) or {
+		eprintln(err)
+		return false
+	}
+	mut all_valid := true
+	for path in docs {
+		mut d := flatxml.parse_file(path) or {
+			eprintln(err)
+			all_valid = false
+			continue
+		}
+		sw := time.new_stopwatch()
+		v := xsd.validate(mut d, s) or {
+			eprintln(err)
+			all_valid = false
+			d.free()
+			continue
+		}
+		took := sw.elapsed()
+		if v.valid() {
+			println('${path}: valid (${ms(took)})')
+		} else {
+			all_valid = false
+			lines := d.line_index()
+			for f in v.findings {
+				line, col := lines.line_col(d.src_off[f.node])
+				println('${path}:${line}:${col}: ${f.msg}')
+			}
+			more := if v.total > v.findings.len { ', ${v.findings.len} shown' } else { '' }
+			println('${path}: ${v.total} findings${more} (${ms(took)})')
+		}
+		d.free()
+	}
+	return all_valid
+}
+
+// validate_batch checks one document per stdin line against the schema documents after it,
+// keeping each compiled schema for the lines that name it again.
+fn validate_batch() {
+	mut out := os.stdout()
+	mut schemas := map[string]&xsd.Schema{}
+	for {
+		line := os.get_raw_line()
+		if line == '' {
+			break
+		}
+		fields := line.trim_right('\r\n').split('\t')
+		key := fields[1..].join('\t')
+		if key !in schemas {
+			schemas[key] = xsd.load(...fields[1..]) or {
+				write_or_exit(mut out, 'error\tschema: ${err.msg().replace('\n', ' ')}\n')
+				out.flush()
+				continue
+			}
+		}
+		s := schemas[key] or { continue }
+		answer := check_one(fields[0], s)
+		write_or_exit(mut out, answer + '\n')
+		out.flush()
+	}
+}
+
+fn check_one(path string, s &xsd.Schema) string {
+	mut d := flatxml.parse_file(path) or { return 'error\t${err.msg().replace('\n', ' ')}' }
+	defer {
+		d.free()
+	}
+	v := xsd.validate(mut d, s, max_findings: 1) or {
+		return 'error\t${err.msg().replace('\n', ' ')}'
+	}
+	if v.valid() {
+		return 'valid'
+	}
+	f := v.findings[0]
+	return 'invalid\t${f.kind}\t${f.msg.replace('\n', ' ')}'
 }
 
 // print_schema compiles the schema documents at paths and counts what they declare.
