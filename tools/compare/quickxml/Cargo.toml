@@ -1,0 +1,11 @@
+[package]
+name = "quickxml-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+quick-xml = "=0.42.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
