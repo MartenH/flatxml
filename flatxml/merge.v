@@ -19,10 +19,11 @@ const scan_children = 16 // up to this many children, a child is found by readin
 // the view when `problems` is not empty.
 pub enum ProblemKind {
 	collision     // one key (or a single child) more than once where the rule does not merge
+	key_reused    // a key another child of its scope already has, under another parent or name
 	ordered_split // the children of an ordered aggregation in more than one document
 	too_many      // more children than the rule allows
 	value_differs // two contributions to one node whose text, or one attribute, differ
-	name_differs  // one key under two element names (or two documents' roots differently named)
+	name_differs  // one key under two element names in one aggregation, or roots named differently
 	missing_key   // a child of a keyed aggregation without its key: kept, as a child of its own
 }
 
@@ -83,6 +84,9 @@ mut:
 	nouts      int
 	nout_frags int
 	order      []int
+	group      map[u32]int // a single aggregation's names, numbered as first written
+	starts     []int
+	fill       []int
 	runs       []Run
 	keys       []string
 	lines      map[u64]LineIndex
@@ -115,9 +119,10 @@ struct Run {
 // merge reads the set's documents as one, by the rules: a view over them, and what the rules
 // forbid in `problems`. The documents' roots are the merged root, if they share its name.
 pub fn (s &DocSet) merge(rules RuleSet) !&Merged {
+	// a merged node has an element of its own, so there are at most as many as elements
 	mut total := 1
 	for d in s.docs {
-		total += d.len()
+		total += d.len() - 1 - d.text_node_count()
 	}
 	mut m := &Merged{
 		set:     s
@@ -137,16 +142,7 @@ pub fn (s &DocSet) merge(rules RuleSet) !&Merged {
 	if s.docs.len > 0 {
 		m.build()
 	}
-	n := int(m.count)
-	m.name.trim(n)
-	m.parent.trim(n)
-	m.scope.trim(n)
-	m.rule.trim(n)
-	m.kind.trim(n)
-	m.key_lo.trim(n + 1)
-	m.frag_lo.trim(n + 1)
-	m.kid_lo.trim(n + 1)
-	m.frags.trim(m.nfrags)
+	m.fit()
 	unsafe {
 		m.kids.free()
 		m.outs.free()
@@ -156,6 +152,36 @@ pub fn (s &DocSet) merge(rules RuleSet) !&Merged {
 		m.keys.free()
 	}
 	return m
+}
+
+// fit cuts the arrays to the merged nodes made, releasing what is left over when that is more
+// than an eighth.
+fn (mut m Merged) fit() {
+	n := int(m.count)
+	if n * 8 < m.name.len * 7 {
+		m.name = m.name[..n].clone()
+		m.parent = m.parent[..n].clone()
+		m.scope = m.scope[..n].clone()
+		m.rule = m.rule[..n].clone()
+		m.kind = m.kind[..n].clone()
+		m.key_lo = m.key_lo[..n + 1].clone()
+		m.frag_lo = m.frag_lo[..n + 1].clone()
+		m.kid_lo = m.kid_lo[..n + 1].clone()
+	} else {
+		m.name.trim(n)
+		m.parent.trim(n)
+		m.scope.trim(n)
+		m.rule.trim(n)
+		m.kind.trim(n)
+		m.key_lo.trim(n + 1)
+		m.frag_lo.trim(n + 1)
+		m.kid_lo.trim(n + 1)
+	}
+	if m.nfrags * 8 < m.frags.len * 7 {
+		m.frags = m.frags[..m.nfrags].clone()
+	} else {
+		m.frags.trim(m.nfrags)
+	}
 }
 
 // build makes the merged root, then the children of every merged node in turn.
@@ -274,13 +300,16 @@ fn (mut m Merged) expand(p u32) {
 		o := m.outs[x]
 		if o.kind == .keyed {
 			if other := m.by_key.find(m, scope, 0, o.key) {
-				first := m.out_frags[o.lo]
+				mut at := m.node(other).fragments()
+				for j in o.lo .. o.hi {
+					at << m.frag_node(m.out_frags[j])
+				}
 				m.problems << Problem{
-					kind: if m.name[other] == o.name { .collision } else { .name_differs }
+					kind: .key_reused
 					node: p
 					key:  o.key
 					what: m.set.tab.name(o.name)
-					at:   [m.frag_node(m.frags[m.frag_lo[other]]), m.frag_node(first)]
+					at:   at
 				}
 				continue
 			}
@@ -350,27 +379,34 @@ fn (mut m Merged) aggregation(p u32, k int, e_ int) {
 				m.out_one(k, r, .single, '')
 				return
 			}
-			// one child per name, in the order first written
-			m.order.clear()
+			// one child per name, in the order first written: the kids of each name together
+			m.group.clear()
+			m.starts.clear()
 			for j in k .. e {
 				t := m.kids[j].tag
-				mut seen := false
-				for i in k .. j {
-					if m.kids[i].tag == t {
-						seen = true
-						break
-					}
+				if t !in m.group {
+					m.group[t] = m.starts.len
+					m.starts << 0
 				}
-				if seen {
-					continue
-				}
-				lo := m.order.len
-				for i in j .. e {
-					if m.kids[i].tag == t {
-						m.order << i
-					}
-				}
-				m.identity_of(p, rule, r, .single, '', lo, m.order.len)
+				m.starts[m.group[t]]++
+			}
+			mut at := 0
+			for g in 0 .. m.starts.len {
+				n := m.starts[g]
+				m.starts[g] = at
+				at += n
+			}
+			m.order.clear()
+			m.order << []int{len: e - k}
+			m.fill.clear()
+			m.fill << m.starts
+			for j in k .. e {
+				g := m.group[m.kids[j].tag]
+				m.order[m.fill[g]] = j
+				m.fill[g]++
+			}
+			for g in 0 .. m.starts.len {
+				m.identity_of(p, rule, r, .single, '', m.starts[g], m.fill[g])
 			}
 		}
 		.keyed {
@@ -418,15 +454,32 @@ fn (mut m Merged) keyed(p u32, rule &CRule, r u32, k int, e int) {
 			return order[a.lo] - order[b.lo]
 		})
 	}
-	// the most there may be, in the order they were written
-	if rule.max > 0 && m.runs.len > rule.max {
-		mut by_first := m.runs.map(order[it.lo])
-		by_first.sort()
-		cut := by_first[rule.max - 1]
+	for j in missing {
+		m.problems << Problem{
+			kind: .missing_key
+			node: p
+			what: m.set.tab.name(m.kids[j].tag)
+			at:   [m.kid_node(j)]
+		}
+	}
+	// the most there may be, keyed or not, in the order they were written
+	mut kept := missing.clone()
+	if rule.max > 0 && m.runs.len + missing.len > rule.max {
+		mut firsts := m.runs.map(order[it.lo])
+		firsts << missing
+		firsts.sort()
+		cut := firsts[rule.max - 1]
 		mut dropped := []Node{}
 		for run in m.runs {
 			if order[run.lo] > cut {
-				dropped << m.kid_node(order[run.lo])
+				for x in run.lo .. run.hi {
+					dropped << m.kid_node(order[x])
+				}
+			}
+		}
+		for j in missing {
+			if j > cut {
+				dropped << m.kid_node(j)
 			}
 		}
 		m.problems << Problem{
@@ -436,31 +489,21 @@ fn (mut m Merged) keyed(p u32, rule &CRule, r u32, k int, e int) {
 			at:   dropped
 		}
 		m.runs = m.runs.filter(order[it.lo] <= cut)
+		kept = missing.filter(it <= cut)
 	}
 	// children without a key after the others, or where they were written when order matters
 	mut x := 0
 	for run in m.runs {
-		for rule.ordered && x < missing.len && missing[x] < order[run.lo] {
-			m.no_key(p, r, missing[x])
+		for rule.ordered && x < kept.len && kept[x] < order[run.lo] {
+			m.out_one(kept[x], r, .each, '')
 			x++
 		}
 		m.identity_of(p, rule, r, .keyed, keys[order[run.lo] - k], run.lo, run.hi)
 	}
-	for x < missing.len {
-		m.no_key(p, r, missing[x])
+	for x < kept.len {
+		m.out_one(kept[x], r, .each, '')
 		x++
 	}
-}
-
-// no_key makes kids[j], a child of a keyed aggregation without its key, a child of its own.
-fn (mut m Merged) no_key(p u32, r u32, j int) {
-	m.problems << Problem{
-		kind: .missing_key
-		node: p
-		what: m.set.tab.name(m.kids[j].tag)
-		at:   [m.kid_node(j)]
-	}
-	m.out_one(j, r, .each, '')
 }
 
 // identity_of makes the kids order[lo .. hi], in the order written and all of one identity, one
@@ -547,8 +590,9 @@ fn (mut m Merged) limit(p u32, rule &CRule, k int, e int) int {
 	return k + rule.max
 }
 
-// differs reports where the contributions to node n disagree with its first: their text, or
-// the value of an attribute both have (unless the rules ignore it).
+// differs reports where the contributions to node n disagree with its first: their text (all of
+// it, where text is mixed with elements), or the value of an attribute both have (unless the
+// rules ignore it).
 fn (mut m Merged) differs(n u32) {
 	lo, hi := m.frag_lo[n], m.frag_lo[n + 1]
 	if hi - lo < 2 {
@@ -556,11 +600,11 @@ fn (mut m Merged) differs(n u32) {
 	}
 	f0 := m.frags[lo]
 	d0 := m.set.docs[f0.doc]
-	t0 := d0.text(f0.i)
+	t0 := Node{d0, f0.i}.text()
 	a_lo, a_hi := d0.attr_range(f0.i)
 	for f in m.frags[lo + 1..hi] {
 		d := m.set.docs[f.doc]
-		if d.text(f.i) != t0 {
+		if Node{d, f.i}.text() != t0 {
 			m.problems << Problem{
 				kind: .value_differs
 				node: n
@@ -807,7 +851,8 @@ pub fn (mut m Merged) pos(n Node) string {
 // describe is a problem in one line, with every position.
 pub fn (mut m Merged) describe(p Problem) string {
 	what := match p.kind {
-		.collision { '${p.what} `${p.key}` more than once, and it does not merge' }
+		.collision { '${p.what} `${p.key}` more than once, and the rule does not merge' }
+		.key_reused { '${p.what} `${p.key}`: the key is used in its scope already' }
 		.ordered_split { 'ordered ${p.what} in more than one document' }
 		.too_many { '${p.what}: more than the rule allows' }
 		.value_differs { '${p.what} differs' + if p.key != '' { ' in `${p.key}`' } else { '' } }
@@ -959,7 +1004,7 @@ pub fn (n MNode) fragments() []Node {
 	return []Node{len: n.fragment_count(), init: n.fragment(index)}
 }
 
-// text is the text of the first contribution.
+// text is the text of the first contribution, all of it where text is mixed with elements.
 pub fn (n MNode) text() string {
 	return n.fragment(0).text()
 }

@@ -71,12 +71,8 @@ struct CompiledRules {
 	fold   bool
 	ignore []u32 // ids of the attributes not compared
 mut:
-	pairs map[u64]u32 // (parent id, child id) -> rule; id 0 stands for any
-	// the same with the fallbacks applied, as met: an open-addressing table of pair keys (0 for
-	// an empty slot; a pair met has two element names, so it is never 0) and their rules
-	met_keys  []u64
-	met_rules []u32
-	met       int
+	pairs    map[u64]u32 // (parent id, child id) -> rule; id 0 stands for any
+	resolved map[u64]u32 // the same, with the fallbacks applied, as met
 }
 
 fn pair_key(parent u32, child u32) u64 {
@@ -110,7 +106,7 @@ fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 		mut parts := []KeyPart{}
 		for p in r.key {
 			at := p.index_u8(`@`)
-			if at >= 0 && (p.index_u8(`/`) > at || at + 1 == p.len) {
+			if at >= 0 && (p[at..].contains('/') || at + 1 == p.len) {
 				return error('rule ${k + 1}: key path `${p}`: an attribute ends a path')
 			}
 			path := if at < 0 { p } else { p[..at] }
@@ -164,51 +160,17 @@ fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 }
 
 // resolve is the rule for a child named child of an element named parent; no_rule for none.
-@[direct_array_access]
 fn (mut cr CompiledRules) resolve(parent u32, child u32) u32 {
 	k := pair_key(parent, child)
-	if cr.met_keys.len == 0 {
-		cr.met_keys = []u64{len: 1024}
-		cr.met_rules = []u32{len: 1024}
+	if r := cr.resolved[k] {
+		return r
 	}
-	mut mask := u64(cr.met_keys.len - 1)
-	mut s := (k * 0x9E37_79B9_7F4A_7C15) >> 32 & mask
-	for cr.met_keys[s] != 0 {
-		if cr.met_keys[s] == k {
-			return cr.met_rules[s]
-		}
-		s = (s + 1) & mask
-	}
-	mut r := no_rule
-	for c in [k, pair_key(parent, 0), pair_key(0, child), u64(0)] {
-		if found := cr.pairs[c] {
-			r = found
-			break
+	r := cr.pairs[k] or {
+		cr.pairs[pair_key(parent, 0)] or {
+			cr.pairs[pair_key(0, child)] or { cr.pairs[u64(0)] or { no_rule } }
 		}
 	}
-	if (cr.met + 1) * 2 > cr.met_keys.len {
-		old_keys, old_rules := cr.met_keys, cr.met_rules
-		cr.met_keys = []u64{len: old_keys.len * 2}
-		cr.met_rules = []u32{len: old_keys.len * 2}
-		mask = u64(cr.met_keys.len - 1)
-		for i, ok in old_keys {
-			if ok != 0 {
-				mut t := (ok * 0x9E37_79B9_7F4A_7C15) >> 32 & mask
-				for cr.met_keys[t] != 0 {
-					t = (t + 1) & mask
-				}
-				cr.met_keys[t] = ok
-				cr.met_rules[t] = old_rules[i]
-			}
-		}
-		s = (k * 0x9E37_79B9_7F4A_7C15) >> 32 & mask
-		for cr.met_keys[s] != 0 {
-			s = (s + 1) & mask
-		}
-	}
-	cr.met_keys[s] = k
-	cr.met_rules[s] = r
-	cr.met++
+	cr.resolved[k] = r
 	return r
 }
 
@@ -245,12 +207,12 @@ fn (p &KeyPart) read(c Node) ?string {
 // parse_rules reads rules from text, one per line:
 //
 //   # a comment; blank lines are ignored
-//   fold                    keys are compared ignoring ASCII case
-//   ignore <attr>...        attributes whose values may differ between contributions
+//   !fold                   keys are compared ignoring ASCII case
+//   !ignore <attr>...       attributes whose values may differ between contributions
 //   <parent> <child>[,<child>...] [key=<path>[,<path>...]] [single] [merge] [ordered] [max=<n>]
 //
-// `*` stands for any parent or any child. Rules are listed in the order their children are
-// written.
+// `*` stands for any parent or any child. A setting starts with `!`, which no element name can,
+// so every name can have a rule. Rules are listed in the order their children are written.
 pub fn parse_rules(text string) !RuleSet {
 	mut rules := []Rule{}
 	mut fold := false
@@ -261,12 +223,21 @@ pub fn parse_rules(text string) !RuleSet {
 			continue
 		}
 		words := line.fields()
-		if words == ['fold'] {
-			fold = true
-			continue
-		}
-		if words[0] == 'ignore' {
-			ignore << words[1..]
+		if words[0].starts_with('!') {
+			match words[0] {
+				'!fold' {
+					if words.len > 1 {
+						return error('line ${n + 1}: `!fold` takes nothing')
+					}
+					fold = true
+				}
+				'!ignore' {
+					ignore << words[1..]
+				}
+				else {
+					return error('line ${n + 1}: unknown setting `${words[0]}`')
+				}
+			}
 			continue
 		}
 		if words.len < 2 {

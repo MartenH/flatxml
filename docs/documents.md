@@ -51,8 +51,9 @@ annotations are kept for that), but none is needed.
    it: a key is unique in its **scope**, the nearest ancestor that is not single (a keyed or
    each child, or the root), so a single child (a wrapper) is transparent to keys. The rules'
    order is the order of their aggregations among a node's children. `parse_rules` reads them
-   from text, one per line (`ITEMS ITEM key=NAME merge`). A schema's annotations can be read
-   into rules, by the caller that knows what they mean.
+   from text, one per line (`ITEMS ITEM key=NAME merge`), with the set's settings on lines that
+   start with `!`, which no element name can (`!fold`, `!ignore ID`). A schema's annotations
+   can be read into rules, by the caller that knows what they mean.
 4. **Diff.** Two documents (or two sets) are compared top down: children with keys matched by
    key, the rest aligned in order (longest common subsequence over their names and contents). A
    hash per subtree, computed once, skips identical subtrees whole. The result is an edit set:
@@ -67,10 +68,13 @@ annotations are kept for that), but none is needed.
    down, so a node's children are consecutive and so are its fragments; a child by name and
    key is a read of up to 16 children or one hash probe, and a node by its key path one probe
    per key. What the rules forbid is a `Problem` with every node involved, so every file and
-   line: a collision, an ordered aggregation in two files, too many children, two fragments
-   whose text or an attribute differ, one key under two names (or roots named differently), a
-   child without its key. The view keeps the first (in the set's order, then document order);
-   a caller for whom a problem is an error refuses the view when there is one.
+   line: a collision, a key used in its scope already (under another parent or name), an
+   ordered aggregation in two files, too many children, two fragments whose text (all of it,
+   where it is mixed with elements) or an attribute differ, one key under two names in one
+   aggregation (or roots named differently), a child without its key. The view keeps the
+   first (in the set's order, then document order), and what it leaves out is in the problem,
+   every contribution of it; a caller for whom a problem is an error refuses the view when
+   there is one.
 6. **Edits.** An edit set over a document or a merged view: set text, set or remove an attribute,
    insert an element (written as a fragment, or copied from any node), remove one, move one. Kept
    as changes keyed by node, so the tree's arrays are never rewritten, and read through: an
@@ -131,11 +135,11 @@ Round trips, which need no oracle:
    one, the problems listed with their positions. A document split into one to six files by
    its keys (200 random documents) merges back to the document, node for node. The 560
    real-world files (1.78M elements), with a rule per aggregation (116 keyed by the text of a
-   child, 820 single), merge in 0.23–0.33 s on one thread into 1.68M merged nodes; the view
-   adds about 100 MB to the set's 250 MB. 144,467 nodes are found again by their key paths in
-   about 0.4 µs each, and 1.37M children by name and key in about 17 ns each. The rules find
+   child, 820 single), merge in about 0.19 s on one thread into 1.68M merged nodes; the view
+   adds about 105 MB to the set's 250 MB. 144,467 nodes are found again by their key paths in
+   about 0.25 µs each, and 1.37M children by name and key in about 12 ns each. The rules find
    540 problems, all values that differ: 534 in two attributes that differ from file to file
-   (one names the schema, one is an identifier), which `ignore` leaves out, and 6 in the text
+   (one names the schema, one is an identifier), which `!ignore` leaves out, and 6 in the text
    of two copies of one definition.
 4. **Diff** (design 4), and `flatxml diff`: two files or two directories, the changes with their
    positions.

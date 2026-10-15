@@ -482,10 +482,16 @@ mut:
 	lookups  bool // merge: time looking every node up
 }
 
-fn read_set_args(args []string) SetArgs {
+// read_set_args reads the arguments of `set`, or of `merge` when merging, and exits with the usage
+// on a flag the command does not take or a value it cannot use.
+fn read_set_args(args []string, merging bool) SetArgs {
 	mut a := SetArgs{}
 	mut k := 0
 	for k < args.len {
+		if !merging && args[k] in ['--rules', '--problems', '--lookups'] {
+			eprintln('flatxml set: ${args[k]} is for merge\n${usage}')
+			exit(2)
+		}
 		match args[k] {
 			'--ns' {
 				a.ns = true
@@ -504,7 +510,12 @@ fn read_set_args(args []string) SetArgs {
 			}
 			'--problems' {
 				k++
-				a.problems = if k < args.len { args[k].int() } else { a.problems }
+				n := if k < args.len { args[k] } else { '' }
+				a.problems = n.int()
+				if '${a.problems}' != n || a.problems < 0 {
+					eprintln('flatxml merge: --problems takes a count, not `${n}`\n${usage}')
+					exit(2)
+				}
 			}
 			'--lookups' {
 				a.lookups = true
@@ -535,7 +546,7 @@ fn (a &SetArgs) files() []string {
 
 // load_set reads files and directories as one document set and prints what it holds.
 fn load_set(args []string) {
-	a := read_set_args(args)
+	a := read_set_args(args, false)
 	sw := time.new_stopwatch()
 	files := a.files()
 	listed := sw.elapsed()
@@ -687,7 +698,7 @@ fn tree_difference(d &flatxml.Doc, xml string) ?string {
 // (`flatxml.parse_rules`), and prints what the view holds and what the rules forbid. It exits 1
 // when a file fails to read or the rules find a problem.
 fn merge_set(args []string) {
-	a := read_set_args(args)
+	a := read_set_args(args, true)
 	if a.rules == '' || a.paths.len == 0 {
 		eprintln(usage)
 		exit(2)

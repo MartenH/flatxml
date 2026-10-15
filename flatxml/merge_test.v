@@ -99,7 +99,7 @@ fn test_keys_compared_ignoring_case() {
 		'a.xml': '<r><s><k>Abc</k></s></r>'
 		'b.xml': '<r><s><k>aBC</k></s></r>'
 	}
-	folded := merged(files, 'fold\nr s key=k merge')
+	folded := merged(files, '!fold\nr s key=k merge')
 	assert names_of(folded.root()) == ['s:Abc']
 	assert folded.at_path('/ABC').fragment_count() == 2
 	assert folded.root().child('s', 'abc').ok()
@@ -163,6 +163,35 @@ fn test_a_single_child_with_two_values_is_reported() {
 	assert m.at_path('/A').child('x', '').text() == '1'
 }
 
+fn test_mixed_text_that_differs_is_reported() {
+	m := merged({
+		'a.xml': '<r><d>one <b/> two</d></r>'
+		'b.xml': '<r><d>one <b/> three</d></r>'
+		'c.xml': '<r><d>one <b/> two</d></r>'
+	}, 'r d single merge\nd b single merge')
+	assert kinds(m) == [.value_differs]
+	assert m.problems[0].at.map(it.doc.path) == ['a.xml', 'b.xml']
+	assert m.root().child('d', '').text() == 'one  two'
+}
+
+fn test_single_children_of_many_names() {
+	mut a, mut b := '<r>', '<r>'
+	for i in 0 .. 300 {
+		a += '<c${i % 100}>${i % 100}</c${i % 100}>'
+		b += '<c${i}>${i}</c${i}>'
+	}
+	m := merged({
+		'a.xml': a + '</r>'
+		'b.xml': b + '</r>'
+	}, 'r * single merge')
+	// three of each of the first hundred names in a: one child each, as first written
+	assert m.root().child_count() == 300
+	assert m.root().kids()[..3].map(it.name()) == ['c0', 'c1', 'c2']
+	assert m.root().child('c7', '').fragment_count() == 4
+	assert m.root().child('c250', '').fragment_count() == 1
+	assert m.problems.len == 0
+}
+
 fn test_attributes_that_differ_are_reported() {
 	m := merged({
 		'a.xml': '<r><pkg u="1" v="same"><n>A</n></pkg></r>'
@@ -174,7 +203,7 @@ fn test_attributes_that_differ_are_reported() {
 	ignored := merged({
 		'a.xml': '<r><pkg u="1"><n>A</n></pkg></r>'
 		'b.xml': '<r><pkg u="2"><n>A</n></pkg></r>'
-	}, 'ignore u v\n' + pkg_rules)
+	}, '!ignore u v\n' + pkg_rules)
 	assert ignored.problems.len == 0
 }
 
@@ -225,6 +254,20 @@ fn test_more_children_than_allowed() {
 	assert kinds(k) == [.too_many]
 	assert names_of(k.root()) == ['s:y', 's:z']
 	assert k.problems[0].at[0].at('k').text() == 'x'
+	// every contribution of a key left out is named
+	every := merged({
+		'a.xml': '<r><s><k>a</k></s><s><k>b</k></s></r>'
+		'b.xml': '<r>\n<s><k>b</k></s></r>'
+	}, 'r s key=k merge max=1')
+	assert kinds(every) == [.too_many]
+	assert every.problems[0].at.map(where(it)) == ['a.xml:1', 'b.xml:2']
+	// children without their key count too
+	keyless := merged({
+		'a.xml': '<r><s><k>a</k></s><s/><s/></r>'
+	}, 'r s key=k max=2')
+	assert kinds(keyless) == [.missing_key, .missing_key, .too_many]
+	assert keyless.problems[2].at.len == 1 && keyless.problems[2].at[0].i == 5
+	assert names_of(keyless.root()) == ['s:a', 's']
 }
 
 fn test_one_key_under_two_names() {
@@ -241,7 +284,7 @@ fn test_one_key_under_two_names() {
 r one,two single merge
 * s key=k merge
 ')
-	assert kinds(w) == [.collision]
+	assert kinds(w) == [.key_reused]
 	assert w.problems[0].at.map(it.parent().name()) == ['one', 'two']
 	assert w.at_path('/a').parent().name() == 'one'
 	n := merged({
@@ -250,8 +293,21 @@ r one,two single merge
 r one,two single merge
 * s,t key=k merge
 ')
-	assert kinds(n) == [.name_differs]
+	assert kinds(n) == [.key_reused]
 	assert n.problems[0].at.map(it.name()) == ['s', 't']
+	// a key used in its scope already leaves out every contribution, merging or not
+	mut all := merged({
+		'a.xml': '<r><w><i><n>k</n></i></w><v><i><n>k</n></i></v></r>'
+		'b.xml': '<r>\n<v><i><n>k</n></i></v></r>'
+	}, '
+r w,v single merge
+w i key=n merge
+v i key=n merge
+')
+	assert kinds(all) == [.key_reused]
+	assert all.problems[0].at.map(where(it)) == ['a.xml:1', 'a.xml:1', 'b.xml:2']
+	assert all.problems[0].at.map(it.parent().name()) == ['w', 'v', 'v']
+	assert all.describe(all.problems[0]).starts_with('key_reused: i `k`: the key is used in its scope already: a.xml:1:7, a.xml:1:29, b.xml:2:4')
 	// below a child of its own a scope starts again
 	e := merged({
 		'a.xml': '<r><it><s><k>a</k></s></it><it><s><k>a</k></s></it></r>'
@@ -334,8 +390,8 @@ a s key=k ordered
 fn test_rules_are_read_and_checked() {
 	rs := parse_rules('
 # comment
-fold
-ignore id x:y
+!fold
+!ignore id x:y
 r a,b key=n,x/@id merge ordered max=3 # trailing
 * * single
 ') or { panic(err) }
@@ -345,7 +401,11 @@ r a,b key=n,x/@id merge ordered max=3 # trailing
 	assert r.parent == 'r' && r.children == ['a', 'b'] && r.key == ['n', 'x/@id']
 	assert r.merge && r.ordered && !r.single && r.max == 3
 	assert rs.rules[1].single
-	for bad in ['r', 'r a nope', 'r a max=0', 'r a max=x', 'r a key='] {
+	// elements named like the settings have rules of their own
+	named := parse_rules('fold ignore single\nignore x') or { panic(err) }
+	assert !named.fold && named.ignore_attrs.len == 0
+	assert named.rules.map(it.parent) == ['fold', 'ignore'] && named.rules[0].single
+	for bad in ['r', 'r a nope', 'r a max=0', 'r a max=x', 'r a key=', '!fold x', '!nope'] {
 		if _ := parse_rules(bad) {
 			assert false, bad
 		}
@@ -353,7 +413,8 @@ r a,b key=n,x/@id merge ordered max=3 # trailing
 	s := set_of({
 		'a.xml': '<r><a/></r>'
 	})
-	for bad in ['r a\nr a single', 'r a key=n single', 'r a key=@x/y', 'r *,a', 'r a key=x@'] {
+	for bad in ['r a\nr a single', 'r a key=n single', 'r a key=@x/y', 'r a key=b/@x/c', 'r *,a',
+		'r a key=x@'] {
 		rules := parse_rules(bad) or { panic(err) }
 		if _ := s.merge(rules) {
 			assert false, bad

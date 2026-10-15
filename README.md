@@ -101,7 +101,7 @@ node)` pairs it is made of. A child's rule is looked up once per pair of names. 
 grouped by rule, then by key, and ordered by key, or as written where the rule says order
 matters. A key is unique in its scope, the nearest ancestor that is not a single child, so a
 node is also found by its key path: one hash probe per key. 560 real-world files (1.78M
-elements) merge in about 0.3 s on one thread. The rules, and the problems the view reports,
+elements) merge in about 0.2 s on one thread. The rules, and the problems the view reports,
 are in [docs/documents.md](docs/documents.md).
 
 **Namespaces** are resolved on request, by `resolve_namespaces`, in a second linear pass: one
