@@ -1,5 +1,7 @@
 module flatxml
 
+import os
+
 fn resolved(src string) &Doc {
 	mut d := parse_string(src) or { panic(err) }
 	d.resolve_namespaces() or { panic(err) }
@@ -116,7 +118,7 @@ fn test_failed_resolution_leaves_no_namespaces() {
 
 // URIs are copies: they outlive the mapped file.
 fn test_uris_outlive_the_source() {
-	mut d := parse_file('testdata/namespaces.xml') or { panic(err) }
+	mut d := parse_file(os.join_path(@VMODROOT, 'testdata', 'namespaces.xml')) or { panic(err) }
 	d.resolve_namespaces() or { panic(err) }
 	uri := d.ns_uri(d.ns_of(d.root()))
 	d.free()
