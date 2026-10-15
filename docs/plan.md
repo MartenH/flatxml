@@ -180,10 +180,9 @@ this element" before "is it in the right place".
    6.8 MB real-world file went from 7.8 ms to 8.8 ms (the parse takes about as long), the 500 MB
    benchmark is unchanged, and compiling the largest real-world schema still takes about 60 ms,
    since a model in which no name occurs twice cannot be ambiguous and skips the construction.
-6. **Typed values and the API** (design 7). Read values by type, and give users a small, safe
-   surface over the arrays: node handles, iterators that allocate nothing, file-level shortcuts,
-   findings with positions, a schema that cannot be changed from outside. The README's examples
-   compile in CI; the benchmark shows the handles cost nothing.
+6. **Typed values** (design 7). Read values by type, findings with positions, a schema that
+   cannot be changed from outside. Comes after [documents.md](documents.md), which gives the
+   handles, navigation, diff, merge and editing these build on.
 7. **Parse speed.** Close the gap to pugixml (0.94 s against flatxml's 1.19 s on the 500 MB
    benchmark) without giving up interned names: the techniques below, each kept only if
    `tools/compare/run.sh` shows it pays.
