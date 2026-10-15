@@ -28,7 +28,7 @@ fn test_dates_and_times() {
 	assert !ok(.time, '13:20:00+14:01') && !ok(.time, '13:20')
 	assert ok(.g_year_month, '2001-12') && ok(.g_year, '2001Z') && ok(.g_month_day, '--02-29')
 	assert !ok(.g_month_day, '--02-30') && ok(.g_day, '---31') && ok(.g_month, '--12')
-	assert ok(.g_month, '--12--') && !ok(.g_month, '--13')
+	assert !ok(.g_month, '--12--') && !ok(.g_month, '--13')
 	assert ok(.duration, 'P1Y2M3DT10H30M') && ok(.duration, '-P120D') && ok(.duration, 'PT1.5S')
 	assert !ok(.duration, 'P') && !ok(.duration, 'P1YT') && !ok(.duration, 'P1.5Y')
 	assert !ok(.duration, 'P1D1Y') && !ok(.duration, 'PT1H1.5M')

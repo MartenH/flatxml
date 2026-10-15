@@ -69,6 +69,8 @@ fn (mut r Reader) resolve() ! {
 		}
 	}
 	r.check_group_cycles()!
+	r.s.compute_empties()
+	r.check_content_models()!
 	r.check_simple_cycles()!
 	r.st_done = []u8{len: r.s.simple_types.len}
 	for k in 0 .. r.s.simple_types.len {

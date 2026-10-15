@@ -158,6 +158,7 @@ pub mut:
 	attributes    []AttrDecl
 	particles     []Particle // particle 0 is unused, so 0 can mean none
 	children      []u32
+	empties       []u8 // per particle: bit 0, one occurrence can be empty; bit 1, the particle can match nothing
 	appinfo       []Appinfo
 	files         []string // the schema documents read, in order
 	notes         []string // what was read differently from how it is written: imports skipped

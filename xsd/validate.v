@@ -16,6 +16,8 @@ pub enum FindingKind {
 	duplicate_id         // an ID already used by another element in the document
 	unknown_idref        // an IDREF naming no ID in the document
 	unbound_prefix       // a QName value whose prefix is not declared where it is written
+	unexpected_element   // a child in the wrong place, or one too many
+	missing_element      // a child the content model requires is not there
 	unsupported          // the document uses something this validator does not support (xsi:type)
 }
 
@@ -58,7 +60,8 @@ pub fn (v &Validation) valid() bool {
 // What a complex type allows, gathered once per type the document uses.
 struct TypeIndex {
 mut:
-	children map[u64]u32 // child element name -> declaration
+	children map[u64]u32 // child element name -> its slot
+	decls    []u32       // per slot: the element declaration
 	attrs    map[u64]AttrUse
 	required []u32 // declarations of the required attributes
 }
@@ -76,6 +79,11 @@ mut:
 	checked   []bool          // per simple type: whether its values have anything to check
 	ids       map[string]u32  // the IDs seen, to the element that carries each
 	idrefs    []IdRef         // the references to IDs, checked once every ID is known
+	firsts    []&FirstSet     // per particle: what it can begin with, made on first use
+	too_many  bool            // check_content: an element passed over for having its maximum
+	dfas      []&ContentDfa   // per complex type: its automaton, nil when the walker decides
+	dfa_made  []bool          // per complex type: whether dfas holds its answer
+	frames    []Frame         // check_content's stack, kept between elements
 	xsi     u32 // the document's id for the xsi namespace
 }
 
@@ -84,8 +92,14 @@ const no_match = u32(0xFFFF_FFFF)
 // validate checks document d against schema s: each element gets the declaration its context
 // gives it, and every element, attribute and run of text the schema does not allow is a finding.
 // Namespaces are resolved first; a document that is not namespace-well-formed is an error.
-// Values and the order and number of children are not checked yet (steps 4 and 5 of the plan).
 pub fn validate(mut d flatxml.Doc, s &Schema, opts Options) !Validation {
+	mut vr := new_validator(mut d, s, opts)!
+	vr.walk()
+	vr.check_idrefs()
+	return vr.v
+}
+
+fn new_validator(mut d flatxml.Doc, s &Schema, opts Options) !Validator {
 	d.resolve_namespaces()!
 	mut vr := Validator{
 		d:    d
@@ -97,14 +111,15 @@ pub fn validate(mut d flatxml.Doc, s &Schema, opts Options) !Validation {
 		xsi:  d.ns_id(xsi_ns_uri) or { no_match }
 		index: []&TypeIndex{len: s.complex_types.len, init: unsafe { nil }}
 		checked:   s.checked()
+		firsts:    []&FirstSet{len: s.particles.len, init: unsafe { nil }}
+		dfas:      []&ContentDfa{len: s.complex_types.len, init: unsafe { nil }}
+		dfa_made:  []bool{len: s.complex_types.len}
 		matcher:   Matcher{
 			use_dfa: true
 		}
 	}
 	vr.map_names()
-	vr.walk()
-	vr.check_idrefs()
-	return vr.v
+	return vr
 }
 
 // IdRef is a reference to an ID, written at node node (an element, or an element carrying it).
@@ -200,15 +215,21 @@ fn (mut vr Validator) walk() {
 		// xsi:type replaces the declared type, which this validator cannot follow: the subtree is
 		// not assessed, and the finding says why
 		if vr.xsi_type(i) {
+			vr.v.decl[i] = 0
 			if vr.keep() {
 				vr.add(i, .unsupported, 'xsi:type on <${d.name(i)}> is not supported')
 			}
 			k = int(d.end[i])
 			continue
 		}
-		decl := vr.match_element(i, p) or {
-			k = int(d.end[i])
-			continue
+		// the parent's content check has matched most elements already
+		decl := if vr.v.decl[i] != 0 {
+			vr.v.decl[i] - 1
+		} else {
+			vr.match_element(i, p) or {
+				k = int(d.end[i])
+				continue
+			}
 		}
 		vr.v.decl[i] = decl + 1
 		vr.check_element(i, decl)
@@ -311,12 +332,13 @@ fn (mut vr Validator) match_element(i u32, p u32) ?u32 {
 	}
 	idx := vr.type_index(t.idx)
 	key := vr.key(i) or { u64(0) }
-	return idx.children[key] or {
+	slot := idx.children[key] or {
 		if vr.keep() {
 			vr.add(i, .undeclared_element, '<${vr.d.name(i)}> is not allowed in <${vr.d.name(p)}>')
 		}
 		return none
 	}
+	return idx.decls[slot]
 }
 
 // check_element checks what element i holds directly: its own text and its attributes.
@@ -350,6 +372,13 @@ fn (mut vr Validator) check_element(i u32, decl u32) {
 		vr.check_value(i, -1, value_type, vr.d.text_content(i))
 	}
 	vr.check_attrs(i, t)
+	if t.kind == .complex {
+		ct := vr.s.complex_types[t.idx]
+		// a nil element's missing children are not a second finding
+		if ct.content in [.element_only, .mixed] && ct.particle != no_particle && !vr.nilled(i) {
+			vr.check_content(i, t.idx)
+		}
+	}
 }
 
 // check_text checks a text node of mixed content (beside child elements) under element p.
@@ -474,7 +503,8 @@ fn (vr &Validator) collect(p u32, mut idx TypeIndex) {
 	if pt.kind == .element {
 		key := vr.s.elements[pt.term].name.key()
 		if key !in idx.children {
-			idx.children[key] = pt.term
+			idx.children[key] = u32(idx.decls.len)
+			idx.decls << pt.term
 		}
 		return
 	}

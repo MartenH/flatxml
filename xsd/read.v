@@ -42,6 +42,7 @@ mut:
 	s          &Schema
 	docs       []&flatxml.Doc
 	loaded     map[string]string // real path -> the document's targetNamespace
+	ids        map[string]bool   // the id attributes of the XSD elements of the document being read
 	pending    []Pending
 	ct_agroups map[u32][]u32 // complex type -> attribute groups it references
 	ct_base    map[u32]u32   // complex type -> the complex type its simple content extends
@@ -93,6 +94,12 @@ fn (mut r Reader) read_file(path string) !string {
 		di:  u32(r.docs.len - 1)
 		xs:  xs
 		dir: os.dir(path)
+	}
+	// an import is read in the middle of its importer, whose ids come back after it
+	outer := r.ids
+	r.ids = map[string]bool{}
+	defer {
+		r.ids = outer
 	}
 	r.check_attrs(c0, root, ['targetNamespace', 'elementFormDefault', 'attributeFormDefault',
 		'version', 'id'])!
@@ -741,7 +748,7 @@ fn (r &Reader) xs_children(c DocCtx, i u32) ![]u32 {
 // check_attrs refuses an unqualified attribute of i that is not in allowed, and XSD 1.1's
 // conditional inclusion (the vc: attributes), which decides whether a component exists at all.
 // Attributes in other namespaces are annotations and are ignored.
-fn (r &Reader) check_attrs(c DocCtx, i u32, allowed []string) ! {
+fn (mut r Reader) check_attrs(c DocCtx, i u32, allowed []string) ! {
 	lo, hi := c.d.attr_range(i)
 	for a := lo; a < hi; a++ {
 		ns := c.d.attr_ns_of(a)
@@ -754,6 +761,17 @@ fn (r &Reader) check_attrs(c DocCtx, i u32, allowed []string) ! {
 		name := c.d.attr_local_name(a)
 		if name !in allowed {
 			return error('${c.d.pos(i)}: ${name} on xsd:${c.d.local_name(i)} is not supported')
+		}
+		// a component's id is an ID: a name, unique in its document
+		if name == 'id' {
+			id := c.d.attr_value(a).trim_space()
+			if !is_name(id, false) {
+				return error('${c.d.pos(i)}: id "${id}" is not a valid name')
+			}
+			if id in r.ids {
+				return error('${c.d.pos(i)}: id "${id}" is used twice')
+			}
+			r.ids[id.clone()] = true
 		}
 	}
 }

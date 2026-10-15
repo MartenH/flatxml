@@ -402,14 +402,14 @@ fn is_g_day(v string) bool {
 	return is_timezone(v[5..])
 }
 
-// is_g_month: --mm, and the --mm-- of XSD 1.0's first edition, which documents still carry.
+// is_g_month: --mm (XSD 1.0's first edition wrote --mm--, which its errata corrected, and the W3C
+// suite expects to be refused).
 fn is_g_month(v string) bool {
 	if v.len < 4 || !v.starts_with('--') {
 		return false
 	}
 	two_digits(v[2..], 1, 12) or { return false }
-	rest := if v[4..].starts_with('--') { v[6..] } else { v[4..] }
-	return is_timezone(rest)
+	return is_timezone(v[4..])
 }
 
 // --- binary --------------------------------------------------------------------------------
