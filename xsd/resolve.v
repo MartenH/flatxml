@@ -70,6 +70,10 @@ fn (mut r Reader) resolve() ! {
 	}
 	r.check_group_cycles()!
 	r.check_simple_cycles()!
+	r.st_done = []u8{len: r.s.simple_types.len}
+	for k in 0 .. r.s.simple_types.len {
+		r.finish_simple_type(u32(k))!
+	}
 	// Each complex type gets the attributes of the groups it references; a use reached through
 	// two groups is one use.
 	for ct in 0 .. r.s.complex_types.len {
@@ -196,6 +200,67 @@ fn (r &Reader) check_simple_cycles() ! {
 			state[c] = 2
 		}
 	}
+}
+
+// finish_simple_type gives simple type k its built-in root and its enumeration values by value,
+// after the types it derives from, and refuses facets that do not apply or loosen the base's:
+// maxLength on a type without length, a longer maxLength, a looser whiteSpace, an enumeration
+// value its base type does not allow. ENTITY and NOTATION need a DTD's declarations, so they are
+// refused.
+fn (mut r Reader) finish_simple_type(k u32) ! {
+	if r.st_done[k] == 2 {
+		return
+	}
+	st := r.s.simple_types[k]
+	if st.base.kind == .simple {
+		r.finish_simple_type(st.base.idx)!
+	}
+	root := r.s.root_of(st.base)
+	r.s.simple_types[k].root = root
+	// the position, worked out only for a message: finding a line scans the file
+	where := fn [r, k] () string {
+		return if int(k) < r.st_where.len {
+			r.docs[r.st_where[k].doc].pos(r.st_where[k].node) + ': '
+		} else {
+			''
+		}
+	}
+	name := r.st_name(k)
+	if root in [.entity, .entities, .notation] {
+		return error('${where()}type ${name} derives from xsd:${builtin_name(root)}, which needs a DTD or notations: not supported')
+	}
+	if st.max_length >= 0 && !length_applies(root) {
+		return error('${where()}maxLength does not apply to type ${name}, a ${builtin_name(root)}')
+	}
+	if st.max_length >= 0 {
+		if base_max := r.s.max_length_of(st.base) {
+			if st.max_length > base_max {
+				return error('${where()}maxLength ${st.max_length} of type ${name} is longer than its base allows (${base_max})')
+			}
+		}
+	}
+	if st.white_space != .unset {
+		if !string_like(root) && st.white_space != .collapse {
+			return error('${where()}whiteSpace of type ${name}, a ${builtin_name(root)}, can only be collapse')
+		}
+		base_ws := r.s.white_space(st.base)
+		if int(st.white_space) < int(base_ws) {
+			return error('${where()}whiteSpace ${st.white_space} of type ${name} is looser than its base (${base_ws})')
+		}
+	}
+	if st.enums.len > 0 {
+		ws := r.s.white_space(TypeRef{.simple, k})
+		mut m := Matcher{}
+		// each value valid for the base, then kept by value for lookups
+		for e in st.enums {
+			v := normalized(e, ws)
+			if p := r.s.value_problem(st.base, v, mut m) {
+				return error('${where()}enumeration value "${shortened(v)}" of type ${name} ${p}')
+			}
+			r.s.simple_types[k].enum_keys[value_key(root, v)] = true
+		}
+	}
+	r.st_done[k] = 2
 }
 
 fn (r &Reader) st_name(st u32) string {

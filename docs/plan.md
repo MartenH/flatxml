@@ -158,9 +158,14 @@ this element" before "is it in the right place".
      with libxml2 string by string. On the W3C suite, invalid schemas that compile fell from 744 to
      127 and invalid documents that pass from 2,678 to 1,191, with no valid schema or document
      rejected. Unicode blocks and `\i`/`\c` are refused (505 suite schemas, none real-world).
-   - **4b, the rest of the facets**: whitespace, enumeration (compared by value), `maxLength`, and
-     the built-in types' lexical spaces, both on values in documents and on the enumeration values
-     in a schema.
+   - **4b, the rest of the facets** (done): the built-in types' lexical spaces (`lexical.v`, scanned
+     in place: a V substring is a copy, and copies cost the most here), enumerations compared by
+     value, `maxLength` in characters, octets or items, unique IDs and resolved IDREFs, QName
+     prefixes declared where written; and when a schema compiles, enumeration values valid for
+     their base, `maxLength` applicable and not growing, `whiteSpace` not loosening. On the W3C
+     suite, invalid documents that pass fell from 1,191 to 20 and invalid schemas that compile from
+     127 to 81, with no valid schema or document rejected; 463 real-world files still agree with
+     libxml2. The 500 MB benchmark validates in about 1.0 s (the parse takes about 1.15 s).
 5. **Content models** (design 4). Order and occurrence, compared with lxml on the generated
    mutations and the W3C suite, whose right-verdict rate should reach lxml's (about 99%).
 6. **Typed values and the API** (design 7). Read values by type, and give users a small, safe

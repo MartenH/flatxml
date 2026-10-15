@@ -54,6 +54,8 @@ pub mut:
 	enums       []string
 	patterns    []string  // as written
 	compiled    []Pattern // the same, compiled
+	root        Builtin   // the built-in type at the end of its derivation chain
+	enum_keys   map[string]bool // its enumeration values by value (value_key), for lookup
 	white_space WhiteSpace
 	max_length  int = -1
 }

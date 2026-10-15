@@ -13,6 +13,9 @@ pub enum FindingKind {
 	abstract_type        // the element's type is abstract
 	not_nillable         // xsi:nil="true" on an element that is not nillable (none is, here)
 	invalid_value        // an element's text or an attribute's value is not a value of its type
+	duplicate_id         // an ID already used by another element in the document
+	unknown_idref        // an IDREF naming no ID in the document
+	unbound_prefix       // a QName value whose prefix is not declared where it is written
 	unsupported          // the document uses something this validator does not support (xsi:type)
 }
 
@@ -70,7 +73,9 @@ mut:
 	name_map []u32 // document name id -> schema name id
 	index   []&TypeIndex // per complex type, filled on first use
 	matcher Matcher           // runs the patterns, a DFA each
-	patterned []bool          // per simple type: whether a pattern applies to its values
+	checked   []bool          // per simple type: whether its values have anything to check
+	ids       map[string]u32  // the IDs seen, to the element that carries each
+	idrefs    []IdRef         // the references to IDs, checked once every ID is known
 	xsi     u32 // the document's id for the xsi namespace
 }
 
@@ -91,14 +96,69 @@ pub fn validate(mut d flatxml.Doc, s &Schema, opts Options) !Validation {
 		}
 		xsi:  d.ns_id(xsi_ns_uri) or { no_match }
 		index: []&TypeIndex{len: s.complex_types.len, init: unsafe { nil }}
-		patterned: s.patterned()
+		checked:   s.checked()
 		matcher:   Matcher{
 			use_dfa: true
 		}
 	}
 	vr.map_names()
 	vr.walk()
+	vr.check_idrefs()
 	return vr.v
+}
+
+// IdRef is a reference to an ID, written at node node (an element, or an element carrying it).
+struct IdRef {
+	node u32
+	id   string
+}
+
+// record_reference keeps what a valid value means beyond itself: an ID (unique in the document),
+// a reference to IDs (checked once every ID is known), a QName (its prefix declared where it is
+// written).
+fn (mut vr Validator) record_reference(i u32, root Builtin, v string) {
+	match root {
+		.id {
+			if first := vr.ids[v] {
+				if vr.keep() {
+					line, _ := vr.d.line_col(first)
+					vr.add(i, .duplicate_id, 'ID "${v}" is already used, by <${vr.d.name(first)}> on line ${line}')
+				}
+			} else {
+				vr.ids[v] = i
+			}
+		}
+		.idref {
+			vr.idrefs << IdRef{i, v}
+		}
+		.idrefs {
+			for item in v.split(' ') {
+				vr.idrefs << IdRef{i, item}
+			}
+		}
+		.qname, .notation {
+			colon := v.index_u8(`:`)
+			if colon > 0 {
+				prefix := v[..colon]
+				if _ := vr.d.ns_for_prefix(i, prefix) {
+					return
+				}
+				if vr.keep() {
+					vr.add(i, .unbound_prefix, 'the prefix of "${v}" is not declared where it is written')
+				}
+			}
+		}
+		else {}
+	}
+}
+
+// check_idrefs reports each reference to an ID no element carries.
+fn (mut vr Validator) check_idrefs() {
+	for r in vr.idrefs {
+		if r.id !in vr.ids && vr.keep() {
+			vr.add(r.node, .unknown_idref, 'IDREF "${r.id}" names no ID in the document')
+		}
+	}
 }
 
 // map_names translates the document's namespace and name ids to the schema's once, so each

@@ -47,6 +47,8 @@ mut:
 	ct_base    map[u32]u32   // complex type -> the complex type its simple content extends
 	ct_state   []u8          // finish: 0 not yet, 1 in progress, 2 done
 	agroup_ord map[u64]u32   // attribute group references made so far, per owner
+	st_where   []Pending     // per simple type: where it is declared (doc and node), for messages
+	st_done    []u8          // finish_simple_types: 0 not yet, 1 in progress, 2 done
 }
 
 // load reads and compiles the schema documents at paths, and the documents they import.
@@ -577,6 +579,10 @@ fn (mut r Reader) simple_type(c DocCtx, i u32, named bool) !u32 {
 		r.s.named_simple[st.name.key()] = idx
 	}
 	r.s.simple_types << st
+	r.st_where << Pending{
+		doc:  c.di
+		node: i
+	}
 	mut seen := false
 	for ch in r.xs_children(c, i)! {
 		local := c.d.local_name(ch)
