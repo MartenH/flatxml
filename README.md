@@ -149,7 +149,8 @@ merged view is written as one document the same way (`Merged.write`, `flatxml me
 node from one file with nothing merged into it below is copied whole, and any other is written
 from its first contribution with its merged children, each after the indentation and comments
 that stood before it. A set of one document writes its file byte for byte unless the rules
-reorder its children.
+reorder its children. `root_attrs` writes the root with attributes set, the rest unchanged
+(`m.write_file(path, root_attrs: [flatxml.AttrValue{'version', '2'}])`).
 
 ```v
 import flatxml

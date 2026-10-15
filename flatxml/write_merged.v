@@ -14,44 +14,72 @@ import io
 // where it is written is given the declarations that restore them, as an edit's is; namespace
 // declarations are never taken from other contributions as attributes.
 
+// AttrValue is an attribute, by its name as written, and its value.
+pub struct AttrValue {
+pub:
+	name  string
+	value string
+}
+
+@[params]
+pub struct MergedWriteOptions {
+pub:
+	// attributes the root is written with, in place of the ones it has of those names, or after
+	// its others (a namespace declaration among them binds its prefix for the whole document)
+	root_attrs []AttrValue
+}
+
 // write writes the merged view as one XML document to w.
-pub fn (m &Merged) write(mut w io.Writer) ! {
+pub fn (m &Merged) write(mut w io.Writer, opts MergedWriteOptions) ! {
 	root := m.root()
 	if !root.ok() {
 		return error('the merged view is empty')
 	}
 	mut em := emitter_to(root.fragment(0).doc, mut w, ModePlan{})
-	m.emit(mut em)!
+	m.emit(mut em, opts)!
 	em.flush()!
 }
 
 // write_file writes the merged view as one XML document to path, as `Doc.write_file` does.
-pub fn (m &Merged) write_file(path string) ! {
-	write_through_temp(path, fn [m] (mut f FileOut) ! {
-		m.write(mut f)!
+pub fn (m &Merged) write_file(path string, opts MergedWriteOptions) ! {
+	write_through_temp(path, fn [m, opts] (mut f FileOut) ! {
+		m.write(mut f, opts)!
 	})!
 }
 
 // xml is the merged view as one XML document; '' when it is empty.
-pub fn (m &Merged) xml() string {
+pub fn (m &Merged) xml(opts MergedWriteOptions) string {
 	root := m.root()
 	if !root.ok() {
 		return ''
 	}
 	mut em := emitter_in(root.fragment(0).doc, ModePlan{}, 4096)
-	m.emit(mut em) or { return '' }
+	m.emit(mut em, opts) or { return '' }
 	em.settle() or { return '' }
 	return em.buf.str()
 }
 
-fn (m &Merged) emit(mut em Emitter) ! {
+fn (m &Merged) emit(mut em Emitter, opts MergedWriteOptions) ! {
 	root := m.root()
 	f := root.fragment(0)
+	inside := if f.doc.declares(f.i) { f.doc.own_bindings(f.i) } else { map[string]string{} }
+	for a in opts.root_attrs {
+		if is_ns_decl_name(a.name) {
+			p := decl_prefix(a.name)
+			if u := inside[p] {
+				if u != a.value {
+					return error('the root attribute ${a.name} rebinds a prefix the document binds to ${u}')
+				}
+			}
+		}
+	}
 	lo, hi := f.doc.span(f.i)
 	em.copy_in(f.doc, 0, lo)!
 	mut w := MergedWriter{
-		m:    m
-		pure: m.pure_nodes()
+		m:            m
+		pure:         m.pure_nodes()
+		root:         root.i
+		root_changes: opts.root_attrs.map(AttrChange{it.name, it.value})
 	}
 	w.element(mut em, root.i, hi, map[string]string{})!
 	em.copy_in(f.doc, hi, u32(f.doc.src_len))!
@@ -90,8 +118,10 @@ fn (m &Merged) pure_nodes() []bool {
 
 @[heap]
 struct MergedWriter {
-	m    &Merged
-	pure []bool
+	m            &Merged
+	pure         []bool
+	root         u32
+	root_changes []AttrChange // the attributes the root is written with
 mut:
 	// the bindings in scope inside an element of a document, by (document, element)
 	inside map[u64]map[string]string
@@ -195,6 +225,16 @@ fn (mut w MergedWriter) element(mut em Emitter, n u32, end u32, scope map[string
 	i := f0.i
 	own := if d.declares(i) { d.own_bindings(i) } else { map[string]string{} }
 	mut decls := scope_decls(w.bindings_above(f0.doc, i), scope, own)
+	if w.pure[n] && n == w.root && w.root_changes.len > 0 {
+		// its start tag with the attributes given, the rest as it is
+		ste := d.start_tag_end(i)
+		closed := d.self_closing(ste)
+		em.start_tag(d, i, w.root_changes, decls, ste, closed)!
+		if !closed {
+			em.copy_in(d, ste, end)!
+		}
+		return
+	}
 	if w.pure[n] {
 		after_name := d.src_off[i] + 1 + u32(d.name(i).len)
 		em.copy_in(d, d.src_off[i], after_name)!
@@ -206,7 +246,18 @@ fn (mut w MergedWriter) element(mut em Emitter, n u32, end u32, scope map[string
 	}
 	// in scope inside it: where it was read, and what its attributes from others declare
 	mut inner := w.bindings_in(f0.doc, i)
-	extras := w.extra_attrs(n, d, i, mut inner, mut decls)
+	if n == w.root && w.root_changes.any(is_ns_decl_name(it.name)) {
+		inner = inner.clone() // the cached bindings stay as read
+		for c in w.root_changes {
+			if is_ns_decl_name(c.name) {
+				inner[decl_prefix(c.name)] = c.value or { '' }
+			}
+		}
+	}
+	mut extras := w.extra_attrs(n, d, i, mut inner, mut decls)
+	if n == w.root {
+		extras << w.root_changes
+	}
 	ste := d.start_tag_end(i)
 	closed := d.self_closing(ste)
 	nkids := m.kid_lo[n + 1] - m.kid_lo[n]

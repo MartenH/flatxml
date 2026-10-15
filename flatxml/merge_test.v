@@ -1036,6 +1036,42 @@ fn test_a_merged_view_keeps_its_namespaces() {
 	}
 }
 
+fn test_a_merged_view_written_with_root_attributes() {
+	// one contribution: its start tag edited, the rest as written
+	one := set_of({
+		'a.xml': '<!-- c -->\n<r xmlns="urn:a" v=\'1\' w="2">\n  <i/>\n</r>\n'
+	}).merge(RuleSet{})!
+	assert one.xml(
+		root_attrs: [AttrValue{'v', '3'}, AttrValue{'xmlns:x', 'urn:x'}, AttrValue{'x:k', 'a&b'}]
+	) == '<!-- c -->\n<r xmlns="urn:a" v=\'3\' w="2" xmlns:x="urn:x" x:k="a&amp;b">\n  <i/>\n</r>\n'
+	assert one.xml() == '<!-- c -->\n<r xmlns="urn:a" v=\'1\' w="2">\n  <i/>\n</r>\n'
+	// a self-closed root
+	assert set_of({
+		'a.xml': '<r/>'
+	}).merge(RuleSet{})!.xml(root_attrs: [AttrValue{'v', '1'}]) == '<r v="1"/>'
+	// several: given over the attributes the others bring, a declaration taken as in scope
+	s := set_of({
+		'a.xml': '<r v="1"><i id="1"/></r>'
+		'b.xml': '<r xmlns:p="urn:p" w="2" p:t="3"><i id="2" p:t="4"/></r>'
+	})
+	m := s.merge(parse_rules('r i key=@id merge')!)!
+	assert m.xml(root_attrs: [AttrValue{'w', '5'}, AttrValue{'xmlns:p', 'urn:p'}]) == '<r v="1" w="5" p:t="3" xmlns:p="urn:p"><i id="1"/><i id="2" p:t="4"/></r>'
+	// a declaration that would change what the document's prefixes mean is refused
+	t := set_of({
+		'a.xml': '<r xmlns:p="urn:p"><p:i/></r>'
+	}).merge(RuleSet{})!
+	path := os.join_path(os.temp_dir(), 'flatxml_root_attrs_${os.getpid()}.xml')
+	defer {
+		os.rm(path) or {}
+	}
+	t.write_file(path, root_attrs: [AttrValue{'xmlns:p', 'urn:q'}]) or {
+		assert err.msg().contains('rebinds')
+		assert !os.exists(path)
+		return
+	}
+	assert false
+}
+
 fn test_a_split_document_merged_and_written_is_the_document() {
 	rules := parse_rules(split_rules) or { panic(err) }
 	mut r := Rng{0x9E37_79B9_7F4A_7C15}
