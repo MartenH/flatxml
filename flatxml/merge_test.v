@@ -1,5 +1,7 @@
 module flatxml
 
+import os
+
 // set_of reads documents from text into one set, each named as given, in the order given.
 fn set_of(files map[string]string) &DocSet {
 	mut s := DocSet.new()
@@ -982,4 +984,126 @@ fn test_rule_sets_are_written_and_read_back() {
 			key:      ['']
 		}]
 	})! == '* *\n* * key=.\n'
+}
+
+// --- a merged view written as one document --------------------------------------------------
+
+fn test_a_set_of_one_document_writes_the_document() {
+	for f in os.walk_ext(os.join_path(@VMODROOT, 'testdata'), '.xml') {
+		src := os.read_file(f) or { panic(err) }
+		mut s := DocSet.new()
+		if s.load([f]).len > 0 {
+			continue
+		}
+		m := s.merge(RuleSet{}) or { panic(err) }
+		assert m.xml() == src, f
+	}
+}
+
+fn test_a_merged_view_written_as_one_document() {
+	s := set_of({
+		'a.xml': '<?xml version="1.0"?>\n<!-- head -->\n<r v="1">\n  <!-- items -->\n  <item id="1">one</item>\n  <group n="g">\n    <x/>\n  </group>\n</r>\n<!-- tail -->\n'
+		'b.xml': '<r w="2">\n  <item id="2">two</item>\n  <group n="g" k="3">\n    <!-- y -->\n    <y/>\n  </group>\n</r>\n'
+	})
+	m := s.merge(parse_rules('r item key=@id merge\nr group key=@n merge')!)!
+	assert m.xml() == '<?xml version="1.0"?>\n<!-- head -->\n<r v="1" w="2">\n  <!-- items -->\n  <item id="1">one</item>\n  <item id="2">two</item>\n  <group n="g" k="3">\n    <x/>\n    <!-- y -->\n    <y/>\n  </group>\n</r>\n<!-- tail -->\n'
+	// a self-closed element that gets children
+	t := set_of({
+		'a.xml': '<r><g n="1"/></r>'
+		'b.xml': '<r><g n="1"><c/></g></r>'
+	})
+	assert t.merge(parse_rules('r g key=@n merge')!)!.xml() == '<r><g n="1"><c/></g></r>'
+	// text kept, whitespace beside it not joined to it
+	u := set_of({
+		'a.xml': '<r><p k="1">text</p></r>'
+		'b.xml': '<r>\n  <p k="1">\n    <c/>\n  </p>\n</r>'
+	})
+	assert u.merge(parse_rules('r p key=@k merge')!)!.xml() == '<r><p k="1">text<c/></p></r>'
+}
+
+fn test_a_merged_view_keeps_its_namespaces() {
+	s := set_of({
+		'a.xml': '<r xmlns="urn:a" xmlns:p="urn:p"><p:i id="1"/></r>'
+		'b.xml': '<r xmlns="urn:b" xmlns:p="urn:q"><p:i id="2"><c/></p:i></r>'
+	})
+	m := s.merge(parse_rules('r p:i key=@id merge')!)!
+	out := m.xml()
+	assert out == '<r xmlns="urn:a" xmlns:p="urn:p"><p:i id="1"/><p:i xmlns="urn:b" xmlns:p="urn:q" id="2"><c/></p:i></r>'
+	mut d := parse_string(out)!
+	d.resolve_namespaces()!
+	for n in d.node(d.root()).descendants('c') {
+		assert d.ns_uri(d.ns_of(n.i)) == 'urn:b'
+	}
+}
+
+fn test_a_split_document_merged_and_written_is_the_document() {
+	rules := parse_rules(split_rules) or { panic(err) }
+	mut r := Rng{0x9E37_79B9_7F4A_7C15}
+	for round in 0 .. 200 {
+		files := 1 + r.intn(6)
+		groups := unique_keys(mut r, 'g', 1 + r.intn(4)).map(gen_group(mut r, it, 0, files))
+		whole := '<model>' + groups.map(it.write(-1)).join('') + '</model>'
+		orig := parse_string(whole) or { panic(err) }
+		mut parts := map[string]string{}
+		for f in 0 .. files {
+			parts['part${f}.xml'] = '<model>' + groups.map(it.write(f)).join('') + '</model>'
+		}
+		m := set_of(parts).merge(rules) or { panic(err) }
+		out := m.xml()
+		// read back, the document
+		written := parse_string(out) or { panic('${err}\n${out}') }
+		assert written.subtree_bytes(written.root()) == orig.subtree_bytes(orig.root()), 'round ${round}'
+		// merged alone, the merged view
+		again := set_of({
+			'out.xml': out
+		}).merge(rules) or { panic(err) }
+		same_tree(again.root(), orig.root_node()) or { panic('round ${round}: ${err}') }
+		same_tree(m.root(), written.root_node()) or { panic('round ${round}: ${err}') }
+	}
+}
+
+fn test_a_merged_view_written_review_cases() {
+	// a declaration from another contribution is not copied: the prefix is bound once
+	a := set_of({
+		'a.xml': '<r xmlns:p="urn:a"><g k="1" p:x="1"/></r>'
+		'b.xml': '<r xmlns:p="urn:b"><g k="1" xmlns:p="urn:c" p:y="2"/></r>'
+	})
+	out := a.merge(parse_rules('r g key=@k merge')!)!.xml()
+	mut d := parse_string(out)!
+	d.resolve_namespaces()!
+	g := d.node(d.root()).first()
+	mut got := map[string]string{}
+	lo, hi := d.attr_range(g.i)
+	for x := lo; x < hi; x++ {
+		if !d.is_ns_decl(x) {
+			got['{${d.ns_uri(d.attr_ns_of(x))}}${d.attr_local_name(x)}'] = d.attr_value(x)
+		}
+	}
+	assert got == {
+		'{}k':      '1'
+		'{urn:a}x': '1'
+		'{urn:c}y': '2'
+	}, out
+	// text stays beside the element it followed, whatever the order of the view
+	b := set_of({
+		'a.xml': '<r><p>x<a k="2"/>y<a k="1"/>z</p></r>'
+	})
+	assert b.merge(parse_rules('p a key=@k')!)!.xml() == '<r><p>x<a k="1"/>z<a k="2"/>y</p></r>'
+	// and so do the comments between an element and its text
+	c := set_of({
+		'a.xml': '<r><p><a/><!--c1-->text<b/></p></r>'
+	})
+	assert c.merge(parse_rules('r p single')!)!.xml() == '<r><p><a/><!--c1-->text<b/></p></r>'
+	// the `xml` prefix is bound everywhere: never declared again
+	x := set_of({
+		'a.xml': '<r><g k="1"/></r>'
+		'b.xml': '<r xmlns:xml="http://www.w3.org/XML/1998/namespace"><g k="2" xml:lang="en"/></r>'
+	})
+	assert x.merge(parse_rules('r g key=@k merge')!)!.xml() == '<r><g k="1"/><g k="2" xml:lang="en"/></r>'
+	// a self-closed first contribution takes its end tag's indentation from another
+	e := set_of({
+		'a.xml': '<r>\n  <g k="1"/>\n</r>'
+		'b.xml': '<r>\n  <g k="1">\n    <c/>\n  </g>\n</r>'
+	})
+	assert e.merge(parse_rules('r g key=@k merge')!)!.xml() == '<r>\n  <g k="1">\n    <c/>\n  </g>\n</r>'
 }

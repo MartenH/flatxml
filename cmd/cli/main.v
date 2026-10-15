@@ -35,7 +35,9 @@
 //                 <file|dir>...    read many files as one set and merge them by the rules
 //                                  (`flatxml.parse_rules`): the merged view's size, its time,
 //                                  and what the rules forbid (the first N, default 10);
-//                                  --lookups times finding every node again
+//                                  --lookups times finding every node again; -o OUT (--out)
+//                                  writes the merged view to OUT as one document (`-`: stdout,
+//                                  in place of the report)
 //   flatxml schema <xsd>...        compile an XML Schema and print what it holds
 //   flatxml schema --batch [--times]   compile one schema per stdin line (tab-separated
 //                                  documents), answering `ok` or `error<TAB>message` per line;
@@ -67,7 +69,7 @@ const usage = 'usage:
   flatxml apply [--rules <file>] [--ns] [--jobs N] [--ext EXT] [--check] <OLD> <NEW> <OUT>
   flatxml apply [...] --in-place <OLD> <NEW>
                                 the diff from OLD to NEW applied to the files of OLD, written to OUT
-  flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups] <file|dir>...
+  flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups] [-o OUT] <file|dir>...
                                 many files merged by rules: the view, its time, the problems
   flatxml diff [--rules <file>] [--ns] [--jobs N] [--ext EXT] [--brief] <A> <B>
                                 what changed from A to B (each a file, a directory or @list)
@@ -522,12 +524,13 @@ mut:
 	brief    bool // diff: the counts only
 	check    bool // apply: read what was written and diff it against the new version
 	in_place bool // apply: write the edited files over the old ones
+	out      string // merge: where to write the merged view as one document
 }
 
 // set_flags are the flags each command that reads a set takes.
 const set_flags = {
 	'set':   ['--ns', '--jobs', '--ext']
-	'merge': ['--ns', '--jobs', '--ext', '--rules', '--problems', '--lookups']
+	'merge': ['--ns', '--jobs', '--ext', '--rules', '--problems', '--lookups', '--out']
 	'diff':  ['--ns', '--jobs', '--ext', '--rules', '--brief']
 	'apply': ['--ns', '--jobs', '--ext', '--rules', '--check', '--in-place']
 }
@@ -542,7 +545,7 @@ fn read_set_args(args []string, cmd string) SetArgs {
 			eprintln('flatxml ${cmd}: ${args[k]} is not one of its flags\n${usage}')
 			exit(2)
 		}
-		if args[k] in ['--jobs', '--ext', '--rules', '--problems'] && k + 1 == args.len {
+		if args[k] in ['--jobs', '--ext', '--rules', '--problems', '--out', '-o'] && k + 1 == args.len {
 			eprintln('flatxml ${cmd}: ${args[k]} takes a value\n${usage}')
 			exit(2)
 		}
@@ -582,6 +585,14 @@ fn read_set_args(args []string, cmd string) SetArgs {
 			}
 			'--in-place' {
 				a.in_place = true
+			}
+			'--out', '-o' {
+				if cmd != 'merge' {
+					eprintln('flatxml ${cmd}: ${args[k]} is not one of its flags\n${usage}')
+					exit(2)
+				}
+				k++
+				a.out = args[k]
 			}
 			else {
 				a.paths << args[k]
@@ -802,6 +813,14 @@ fn merge_set(args []string) {
 		eprintln('${a.rules}: ${err}')
 		exit(1)
 	}
+	// the report goes to stderr where the document goes to stdout
+	say := fn [a] (line string) {
+		if a.out == '-' {
+			eprintln(line)
+		} else {
+			println(line)
+		}
+	}
 	sw := time.new_stopwatch()
 	mut s := flatxml.DocSet.new()
 	errs := s.load(a.files(), jobs: a.jobs, namespaces: a.ns)
@@ -815,23 +834,37 @@ fn merge_set(args []string) {
 	for d in s.docs {
 		nodes += d.len() - 1 - d.text_node_count()
 	}
-	println('${s.docs.len} files, ${nodes} elements, read in ${ms(read)}')
-	println('merged in ${ms(merged)}: ${m.len()} nodes from ${m.fragment_total()} contributions, ${m.problems.len} problems')
+	say('${s.docs.len} files, ${nodes} elements, read in ${ms(read)}')
+	say('merged in ${ms(merged)}: ${m.len()} nodes from ${m.fragment_total()} contributions, ${m.problems.len} problems')
 	mut by_kind := map[string]int{}
 	for p in m.problems {
 		by_kind['${p.kind}']++
 	}
 	for kind, n in by_kind {
-		println('  ${kind}: ${n}')
+		say('  ${kind}: ${n}')
 	}
 	for p in m.problems#[..a.problems] {
-		println('  ${one_line(m.describe(p))}')
+		say('  ${one_line(m.describe(p))}')
 	}
 	if a.lookups {
 		time_lookups(m)
 	}
+	if a.out == '-' {
+		mut out := os.stdout()
+		m.write(mut out) or {
+			eprintln('flatxml merge: ${err}')
+			exit(1)
+		}
+	} else if a.out != '' {
+		ws := time.new_stopwatch()
+		m.write_file(a.out) or {
+			eprintln('flatxml merge: ${a.out}: ${err}')
+			exit(1)
+		}
+		say('written to ${a.out} in ${ms(ws.elapsed())}: ${mb(os.file_size(a.out))}')
+	}
 	for e in errs {
-		println('  failed: ${one_line(e.msg)}')
+		say('  failed: ${one_line(e.msg)}')
 	}
 	if errs.len > 0 || m.problems.len > 0 {
 		exit(1)

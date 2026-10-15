@@ -214,6 +214,25 @@ Round trips, which need no oracle:
    does not use them: on a loaded machine, six runs each took 246–296 ms against 248–287 ms
    before, and 265–309 ms with a path rule beside every rule of the set (1,873 rules), so that
    every parent's ancestors are read.
+
+   A merged view is written as one document (`Merged.write`, `write_file`, `flatxml merge -o`): a
+   node made of one contribution whose children are its own, unchanged all the way down, is copied
+   byte for byte; any other is written from its first contribution: its start tag, with the
+   attributes only the others have after its own (a prefixed one by a prefix bound to its namespace
+   where it is written, declared if none is; namespace declarations themselves never), its merged
+   children in the view's order, each after the indentation and comments that stood before it where
+   it was read, the text, comments and processing instructions that followed each of the first
+   contribution's own children after that child, and the bytes before the end tag (another
+   contribution's where the first had none). An element read where other namespace bindings were in
+   scope is given the declarations that restore them, the rule the edit writer uses. A set of one
+   document writes its file byte for byte where the rules keep its children in the order written
+   (with no rules, always: `testdata/`); 200 random documents split into one to six files by their
+   keys, merged and written, are the document again, and the written file merged alone is the same
+   view. The 560 real-world files with their rules (936) write as one 160 MB document in about 0.35
+   s in memory (1.0–1.4 s to a file, synced to disk), and `flatxml diff` of the inputs against it,
+   both merged by the rules, finds one change: a declaration of the reserved `xml` prefix on the
+   root of a later file, which binds nothing and is not carried.
+
 4. **Diff** (design 4, done), and `flatxml diff [--rules FILE] A B`: two files, directories or
    lists, the changes with their paths and positions, exit 0 when there are none and 1 when
    there are. Diffs of 400 random documents, each changed by one to four random edits, applied
