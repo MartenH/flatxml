@@ -159,17 +159,17 @@ println('<v>${flatxml.escape_text('a < b')}</v>')
 ```
 
 **Editing.** An edit set (`Doc.edit`) keeps changes beside the document, keyed by node, and never
-rewrites its arrays: set an element's text (or its runs of text, each after so many children),
-set or remove an attribute, insert an element (parsed
-from a string, or copied from any node of any document), remove one, move one. It reads through
-its changes (`ENode`: name, text, attributes, children, parent, as edited), so a chain of edits
-can be made on what earlier ones did, and inside inserted content too. Written, it copies every
-byte no edit touched; an element with a changed attribute keeps its other attributes as written,
-a removed element takes the indentation before it, and an inserted one gets its neighbours'. An
-element moved or copied keeps the namespaces of where it was read: where they differ at its new
-place, it is given the declarations that restore them, `xmlns=""` included. A fragment is read in
-the namespaces in scope where it is first put. `flatxml edit` applies a script of edits from the
-command line.
+rewrites its arrays: set an element's text (or its runs of text, each after so many children), set
+or remove an attribute, insert an element (parsed from a string, or copied from any node of any
+document), remove one, move one. It reads through its changes (`ENode`: name, text, attributes,
+children, parent, as edited), so a chain of edits can be made on what earlier ones did, and inside
+inserted content too. Written, it copies every byte no edit touched; an element with a changed
+attribute keeps its other attributes as written, a removed element takes the indentation before it,
+and an inserted one gets its neighbours'. An element moved or copied keeps the namespaces of where
+it was read: where they differ at its new place, it is given the declarations that restore them,
+`xmlns=""` included. A fragment is read in the namespaces in scope where it is first put, and
+refused if a prefix it uses is bound neither there nor in it. `flatxml edit` applies a script of
+edits from the command line.
 
 ```v
 import flatxml

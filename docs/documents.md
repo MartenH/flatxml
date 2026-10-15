@@ -243,15 +243,17 @@ Round trips, which need no oracle:
    lxml's differs in 1,015,501. An edited 500 MB document writes in the time an unedited one does
    (0.66–0.83 s against 0.70–0.87 s to a file).
 
-   Applying a diff (`flatxml apply`, next) is a thin layer on this, and a test does it: a removed
-   node is `remove`d, a moved one `remove`d and later `place`d, an added one `insert_copy`d from
-   the new document, at its index, lowest first, and then texts (`set_text_runs`, run by run in
-   their slots among the children) and attributes set. Since a diff places text by slot, an element
-   whose children change gets its runs set again at the slots they had, unless its text changed
-   too. Diffs between 18,000 random documents and random edits of them (six seeds), applied this
-   way, give the new document (as a diff compares it). Edits on a merged view are edit sets on the
-   documents its nodes come from, one per document: a value held in several is set in each, and a
-   new element goes to the document the caller names.
+   Applying a diff (`flatxml apply`, next) is a thin layer on this, and a test does it
+   (`apply_diff` in `edit_test.v`): a removed node is `remove`d, a moved one `remove`d and later
+   `place`d, an added one `insert_copy`d from the new document, at its index, lowest first, and
+   then texts (`set_text_runs`, run by run in their slots among the children) and attributes set.
+   One rule comes with it: a diff places text by slot and reports a text change only where the runs
+   differ, so an element whose children change (a child removed, added, or moved out or in) must
+   have its runs set again at their old slots, unless it has a text change of its own. Diffs
+   between 18,000 random documents and random edits of them (six seeds), applied this way, give the
+   new document (as a diff compares it). Edits on a merged view are edit sets on the documents its
+   nodes come from, one per document: a value held in several is set in each, and a new element
+   goes to the document the caller names.
 6. **Three-way merge**: two changed versions of one base.
 
 ## Techniques taken from other tools

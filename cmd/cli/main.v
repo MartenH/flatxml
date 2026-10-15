@@ -954,7 +954,8 @@ fn edit_doc(path string, out string, script string) ! {
 
 fn edit_line(mut e flatxml.Edit, d &flatxml.Doc, f []string) ! {
 	want := match f[0] {
-		'text', 'noattr', 'remove' { if f[0] == 'remove' { 2 } else { 3 } }
+		'remove' { 2 }
+		'text', 'noattr' { 3 }
 		'attr', 'insert', 'copy', 'move' { 4 }
 		else { return error('unknown edit `${f[0]}`') }
 	}
@@ -973,16 +974,16 @@ fn edit_line(mut e flatxml.Edit, d &flatxml.Doc, f []string) ! {
 			e.remove_attr(n, f[2])!
 		}
 		'insert' {
-			e.insert(n, f[2].int(), f[3])!
+			e.insert(n, field_index(f[2])!, f[3])!
 		}
 		'copy' {
-			e.insert_copy(n, f[2].int(), doc_at(d, f[3])!)!
+			e.insert_copy(n, field_index(f[2])!, doc_at(d, f[3])!)!
 		}
 		'remove' {
 			e.remove(n)!
 		}
 		else {
-			e.move(edited_at(e, f[3])!, n, f[2].int())!
+			e.move(edited_at(e, f[3])!, n, field_index(f[2])!)!
 		}
 	}
 }
@@ -990,10 +991,10 @@ fn edit_line(mut e flatxml.Edit, d &flatxml.Doc, f []string) ! {
 // edited_at is the element at path in the edited document.
 fn edited_at(e &flatxml.Edit, path string) !flatxml.ENode {
 	mut n := e.root()
-	for part in path.split('/').filter(it != '') {
+	for part in path_parts(path)! {
 		kids := n.children()
-		k := part.int()
-		if k < 0 || k >= kids.len {
+		k := part
+		if k >= kids.len {
 			return error('no element ${path}')
 		}
 		n = kids[k]
@@ -1004,8 +1005,8 @@ fn edited_at(e &flatxml.Edit, path string) !flatxml.ENode {
 // doc_at is the element at path in the document as read.
 fn doc_at(d &flatxml.Doc, path string) !flatxml.Node {
 	mut n := d.root_node()
-	for part in path.split('/').filter(it != '') {
-		mut k := part.int()
+	for part in path_parts(path)! {
+		mut k := part
 		mut found := flatxml.Node{}
 		for c in n.children() {
 			if k == 0 {
@@ -1020,6 +1021,28 @@ fn doc_at(d &flatxml.Doc, path string) !flatxml.Node {
 		n = found
 	}
 	return n
+}
+
+// path_parts are the child element numbers of an element path: `/`, or `/` then numbers
+// separated by `/`.
+fn path_parts(path string) ![]int {
+	if !path.starts_with('/') {
+		return error('`${path}` is not a path: it starts with `/`')
+	}
+	if path == '/' {
+		return []
+	}
+	return path[1..].split('/').map(field_index(it) or {
+		return error('`${path}` is not a path: ${err}')
+	})
+}
+
+// field_index reads a number: decimal digits and nothing else.
+fn field_index(s string) !int {
+	if s == '' || s.len > 9 || !s.bytes().all(it >= `0` && it <= `9`) {
+		return error('`${s}` is not a number')
+	}
+	return s.int()
 }
 
 // unescape_field reads `\\`, `\\t`, `\\n` and `\\r` in an edit script's field.

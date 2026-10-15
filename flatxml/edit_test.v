@@ -420,13 +420,14 @@ fn random_doc(mut r Rng) string {
 	return s + '\n</root>' + r.pick(['', '\n', '\n<!-- tail -->\n'])
 }
 
-// apply_random makes one random edit to both the edit set and the model.
-fn apply_random(mut r Rng, mut e Edit, mut root TM, other &Doc) ! {
+// apply_random makes one random edit to both the edit set and the model; gone holds the
+// elements removed, with what is inside them.
+fn apply_random(mut r Rng, mut e Edit, mut root TM, mut gone []&TM, other &Doc) ! {
 	mut all := []&TM{}
 	root.all(mut all)
 	mut t := all[r.n(all.len)]
 	n := ENode{e, t.key}
-	match r.n(8) {
+	match r.n(9) {
 		0 {
 			v := r.pick(['new', '', 'a < b & "c"', ' ', 'été', 'x]]>y'])
 			e.set_text(n, v)!
@@ -498,6 +499,33 @@ fn apply_random(mut r Rng, mut e Edit, mut root TM, other &Doc) ! {
 			e.remove(n)!
 			p.kids.delete(p.kids.map(voidptr(it)).index(voidptr(t)))
 			p.touched = true
+			gone << t
+		}
+		8 {
+			// an element removed, or inside one removed, put back under t
+			if gone.len == 0 {
+				return
+			}
+			g := gone[r.n(gone.len)]
+			mut inside := []&TM{}
+			g.all(mut inside)
+			mut x := inside[r.n(inside.len)]
+			if voidptr(x) == voidptr(g) {
+				gone.delete(gone.map(voidptr(it)).index(voidptr(g)))
+			} else {
+				mut from := g.parent_of(x) or { return }
+				from.kids.delete(from.kids.map(voidptr(it)).index(voidptr(x)))
+				from.touched = true
+			}
+			at := r.n(t.kids.len + 1)
+			if r.n(2) == 0 {
+				e.place(ENode{e, x.key}, n, at)!
+			} else {
+				e.move(ENode{e, x.key}, n, at)!
+			}
+			t.kids.insert(at, x)
+			t.touched = true
+			x.moved = true
 		}
 		else {
 			// move t under an element outside it
@@ -582,9 +610,10 @@ fn test_random_edit_sets() {
 		other.resolve_namespaces()!
 		mut e := d.edit()
 		mut root := tm_of(d, d.root(), 0, true)
+		mut gone := []&TM{}
 		count := 1 + r.n(8)
 		for _ in 0 .. count {
-			apply_random(mut r, mut e, mut root, other)!
+			apply_random(mut r, mut e, mut root, mut gone, other)!
 			ops++
 		}
 		out := e.xml()
@@ -624,8 +653,10 @@ fn test_set_text_runs() {
 
 // apply_diff makes the changes of diff, from the document e edits to another, as the diff says to:
 // removals and moves lifted out, then added and moved nodes put in at their places, lowest first,
-// then texts and attributes. A diff places text by slot (after so many children), so an element
-// whose children change keeps its runs at their slots unless its text changed too.
+// then texts and attributes. A diff places text by slot (after so many child elements) and reports
+// a text change only where the runs differ, so an element whose children change (a child
+// removed, added or moved out or in) must have its runs set again at their old slots, unless it
+// has a text change of its own.
 fn apply_diff(mut e Edit, diff Diff) ! {
 	at := fn [e] (n MNode) ENode {
 		return e.node(n.fragment(0).i)
@@ -676,10 +707,11 @@ fn apply_diff(mut e Edit, diff Diff) ! {
 	}
 }
 
-// ns_shape writes a tree as one line, as a diff compares it: names with their namespaces,
-// attributes in any order, and the own text at each slot among the children (the runs of one slot
-// joined: a comment between two is not kept).
-fn ns_shape(d &Doc, i u32) string {
+// diff_shape writes a tree as one line, as a diff compares it: names as written, attributes in
+// any order, and the own text at each slot among the children (the runs of one slot joined: a
+// comment between two is not kept). Not namespaces: a diff matches elements by their names as
+// written, so it may move one where another of that name was, and a moved element keeps its own.
+fn diff_shape(d &Doc, i u32) string {
 	mut slots := map[int]string{}
 	for r in d.node(i).text_runs() {
 		slots[r.slot] += r.text
@@ -692,9 +724,9 @@ fn ns_shape(d &Doc, i u32) string {
 		}
 	}
 	attrs.sort()
-	mut s := '{${d.ns_uri(d.ns_of(i))}}${d.name(i)}${attrs}${slots}'
+	mut s := '${d.name(i)}${attrs}${slots}'
 	for c in d.node(i).children() {
-		s += ns_shape(d, c.i)
+		s += diff_shape(d, c.i)
 	}
 	return s + '/'
 }
@@ -711,8 +743,9 @@ fn test_a_diff_applied_by_an_edit_set_gives_the_new_document() {
 		other.resolve_namespaces()!
 		mut e0 := a.edit()
 		mut model := tm_of(a, a.root(), 0, true)
+		mut gone := []&TM{}
 		for _ in 0 .. 1 + r.n(6) {
-			apply_random(mut r, mut e0, mut model, other)!
+			apply_random(mut r, mut e0, mut model, mut gone, other)!
 		}
 		mut b := doc_of(e0.xml())
 		b.resolve_namespaces()!
@@ -725,8 +758,99 @@ fn test_a_diff_applied_by_an_edit_set_gives_the_new_document() {
 		out := e.xml()
 		mut w := doc_of(out)
 		w.resolve_namespaces()!
-		assert ns_shape(w, w.root()) == ns_shape(b, b.root()), out
+		assert diff_shape(w, w.root()) == diff_shape(b, b.root()), out
 		applied++
 	}
 	assert applied > 250
+}
+
+fn test_a_move_that_fails_changes_nothing() {
+	d := doc_of('<r><a/><b/></r>')
+	mut e := d.edit()
+	a := e.root().child('a')
+	// two children, a among them: without it there is one, so 2 is out of range
+	e.move(a, e.root(), 2) or { assert err.msg().contains('out of range') }
+	assert !a.removed()
+	assert e.root().children().map(it.name()) == ['a', 'b']
+	assert e.xml() == '<r><a/><b/></r>'
+	e.move(a, e.root(), 1)!
+	assert e.xml() == '<r><b/><a/></r>'
+	e.move(e.root(), a, 0) or { assert err.msg().contains('root') }
+}
+
+fn test_an_element_inside_a_removed_one_can_be_put_back() {
+	d := doc_of('<r><a><b/><c/></a><z/></r>')
+	mut e := d.edit()
+	a := e.root().child('a')
+	b := a.child('b')
+	c := a.child('c')
+	e.remove(a)!
+	assert b.removed()
+	e.remove(b) or { assert err.msg().contains('not in the document') }
+	e.place(b, e.root(), 0)!
+	e.move(c, e.root(), 2)!
+	assert e.xml() == '<r><b/><z/><c/></r>'
+	// and what it was taken from no longer holds it
+	e.place(a, e.root(), 0)!
+	assert e.xml() == '<r><a></a><b/><z/><c/></r>'
+	assert a.children().len == 0 && b.parent().key == e.root().key
+}
+
+fn test_a_fragment_must_have_its_prefixes_bound() {
+	d := doc_of('<r xmlns:q="urn:q"><a/></r>')
+	mut e := d.edit()
+	e.insert(e.root(), 0, '<p:n/>') or { assert err.msg().contains('prefix `p`') }
+	e.insert(e.root(), 0, '<n p:k="1"/>') or { assert err.msg().contains('prefix `p`') }
+	e.insert(e.root(), 0, '<q:n/>')!
+	e.insert(e.root(), 0, '<p:n xmlns:p="urn:p"><p:m xml:lang="en"/></p:n>')!
+	assert e.xml() == '<r xmlns:q="urn:q"><p:n xmlns:p="urn:p"><p:m xml:lang="en"/></p:n><q:n/><a/></r>'
+}
+
+fn test_free_leaves_an_empty_edit_set() {
+	d := doc_of('<r><a/></r>')
+	mut e := d.edit()
+	n := e.insert(e.root(), 0, '<n/>')!
+	e.set_attr(e.root(), 'k', 'v')!
+	e.free()
+	assert !n.ok() && n.name() == '' && n.children().len == 0
+	assert e.xml() == '<r><a/></r>'
+	e.set_attr(n, 'k', 'v') or { assert err.msg().contains('not a node') }
+	e.insert(e.root(), 1, '<m/>')!
+	assert e.xml() == '<r><a/><m/></r>'
+}
+
+fn test_many_inserts_and_attributes() {
+	mut s := '<r>'
+	for k in 0 .. 2000 {
+		s += '<c n="${k}"/>'
+	}
+	d := doc_of(s + '</r>')
+	mut e := d.edit()
+	r := e.root()
+	// before every other original child, in the order of the children
+	for k in 0 .. 2000 {
+		e.insert(r, 2 * k, '<i n="${k}"/>')!
+	}
+	kids := r.children()
+	assert kids.len == 4000
+	for k in 0 .. 2000 {
+		assert kids[2 * k].attr('n') == '${k}' && kids[2 * k].name() == 'i'
+		assert kids[2 * k + 1].name() == 'c'
+	}
+	// an element with many attributes, changed and removed
+	mut t := '<r'
+	for k in 0 .. 500 {
+		t += ' a${k}="${k}"'
+	}
+	d2 := doc_of(t + '/>')
+	mut e2 := d2.edit()
+	for k in 0 .. 500 {
+		if k % 2 == 0 {
+			e2.remove_attr(e2.root(), 'a${k}')!
+		} else {
+			e2.set_attr(e2.root(), 'a${k}', 'x')!
+		}
+	}
+	out := e2.xml()
+	assert out.starts_with('<r a1="x" a3="x"') && !out.contains('a0=') && out.ends_with(' a499="x"/>')
 }

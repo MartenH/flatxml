@@ -46,23 +46,21 @@ struct Piece {
 // NodeEdit is what changed at one node.
 struct NodeEdit {
 mut:
-	runs     ?[]TextRun // its own text, run by run, when set
-	attrs    []AttrChange
-	ins      []Insert // elements put under this one, each before an original child or at the end
-	lost     int      // original children removed or moved away
-	detached bool     // not where it was: removed, or moved
-	placed   bool     // put under `parent` by an insert or a move
+	runs  ?[]TextRun // its own text, run by run, when set
+	attrs []AttrChange
+	// elements put under this one, by the original child each goes before (no_key: after the
+	// last), in order
+	ins      map[u64][]u64
+	lost     int  // original children removed or moved away
+	detached bool // not where it was: removed, or moved
+	placed   bool // put under `parent`, before its original child `anchor`, by an insert or a move
 	parent   u64 = no_key
+	anchor   u64 = no_key
 }
 
 struct AttrChange {
 	name  string
 	value ?string // none: removed
-}
-
-struct Insert {
-	anchor u64 // the original child it goes before; no_key: after the last
-	node   u64
 }
 
 // Edit is a set of edits over a document.
@@ -86,7 +84,8 @@ pub fn (d &Doc) edit() &Edit {
 	}
 }
 
-// free releases the fragments the edit set parsed.
+// free releases the fragments the edit set parsed and drops every edit: the edit set is empty
+// again, and a node of inserted content reads as a missing one.
 pub fn (mut e Edit) free() {
 	for mut p in e.pieces {
 		if p.owned {
@@ -94,7 +93,8 @@ pub fn (mut e Edit) free() {
 			d.free()
 		}
 	}
-	e.pieces = []
+	e.pieces = [e.pieces[0]]
+	e.nodes = map[u64]NodeEdit{}
 }
 
 // ENode is a node of an edited document: an element, read with the edits applied.
@@ -123,7 +123,7 @@ pub fn (e &Edit) node(i u32) ENode {
 
 // ok reports whether the handle names a node.
 pub fn (n ENode) ok() bool {
-	return n.key != no_key
+	return n.key != no_key && !isnil(n.e) && int(kpiece(n.key)) < n.e.pieces.len
 }
 
 // source is the node this one reads: in the edited document, or in inserted content.
@@ -170,7 +170,7 @@ pub fn (n ENode) text_runs() []TextRun {
 	mut c := d.first_child(i)
 	for c != no_node {
 		ck := ekey(pc, c)
-		slot += ne.ins.filter(it.anchor == ck).len
+		slot += (ne.ins[ck] or { [] }).len
 		if d.is_text(c) {
 			out << TextRun{slot, d.text(c)}
 		} else if !n.e.detached(ck) {
@@ -224,23 +224,36 @@ struct FinalAttr {
 // is a new one.
 fn final_attrs(d &Doc, i u32, changes []AttrChange) []FinalAttr {
 	mut out := []FinalAttr{}
+	mut at := map[string]int{} // name -> its entry in out
+	mut gone := []bool{}
 	lo, hi := d.attr_range(i)
 	for a := lo; a < hi; a++ {
+		at[d.attr_name(a)] = out.len
 		out << FinalAttr{d.attr_name(a), d.attr_value(a), int(a), false}
+		gone << false
 	}
 	for c in changes {
-		k := out.map(it.name).index(c.name)
+		k := at[c.name] or { -1 }
 		if v := c.value {
 			if k >= 0 {
 				out[k] = FinalAttr{c.name, v, out[k].src, true}
 			} else {
+				at[c.name] = out.len
 				out << FinalAttr{c.name, v, -1, true}
+				gone << false
 			}
 		} else if k >= 0 {
-			out.delete(k)
+			gone[k] = true
+			at.delete(c.name)
 		}
 	}
-	return out
+	mut kept := []FinalAttr{cap: out.len}
+	for k, f in out {
+		if !gone[k] {
+			kept << f
+		}
+	}
+	return kept
 }
 
 // children are the child elements, in order.
@@ -343,33 +356,35 @@ fn (e &Edit) kids(p u64) []u64 {
 	mut c := d.first_child(kindex(p))
 	for c != no_node {
 		ck := ekey(pc, c)
-		for x in ne.ins {
-			if x.anchor == ck {
-				out << x.node
-			}
+		if put := ne.ins[ck] {
+			out << put
 		}
 		if d.is_element(c) && !e.detached(ck) {
 			out << ck
 		}
 		c = d.next_sibling(c)
 	}
-	for x in ne.ins {
-		if x.anchor == no_key {
-			out << x.node
-		}
+	if put := ne.ins[no_key] {
+		out << put
 	}
 	return out
 }
 
 // --- edits ----------------------------------------------------------------------------------
 
-fn (e &Edit) check(n ENode, what string) ! {
+// check_node fails unless n is an element of this edit set.
+fn (e &Edit) check_node(n ENode, what string) ! {
 	if !n.ok() || voidptr(n.e) != voidptr(e) {
 		return error('${what}: not a node of this edit set')
 	}
 	if !e.is_element(n.key) {
 		return error('${what}: not an element')
 	}
+}
+
+// check fails unless n is an element of this edit set in the edited document.
+fn (e &Edit) check(n ENode, what string) ! {
+	e.check_node(n, what)!
 	if !e.in_tree(n.key) {
 		return error('${what}: <${n.name()}> is not in the document')
 	}
@@ -421,15 +436,20 @@ pub fn (mut e Edit) remove_attr(n ENode, name string) ! {
 
 // insert parses xml, an element (whitespace, comments and processing instructions around it are
 // left out), and puts it under parent as its child element number index. It is read in the
-// namespaces in scope where it is put.
+// namespaces in scope where it is put, so a prefix it uses must be bound there or in it.
 pub fn (mut e Edit) insert(parent ENode, index int, xml string) !ENode {
 	e.check(parent, 'insert')!
-	d := parse_string(xml)!
+	mut d := parse_string(xml)!
+	scope := e.scope_in(parent.key)
+	if p := unbound_prefix(d, scope) {
+		d.free()
+		return error('insert: the prefix `${p}` is not bound in the fragment or where it goes')
+	}
 	e.pieces << Piece{
 		doc:   d
 		root:  d.root()
 		owned: true
-		scope: e.scope_in(parent.key)
+		scope: scope
 	}
 	k := ekey(u32(e.pieces.len - 1), d.root())
 	e.put(k, parent.key, index) or {
@@ -459,6 +479,49 @@ pub fn (mut e Edit) insert_copy(parent ENode, index int, src Node) !ENode {
 	return ENode{e, k}
 }
 
+// unbound_prefix is a prefix that an element or attribute name of d uses and that neither d's
+// declarations in scope there nor scope bind.
+fn unbound_prefix(d &Doc, scope map[string]string) ?string {
+	for k in 1 .. d.len() {
+		j := u32(k)
+		if !d.is_element(j) {
+			continue
+		}
+		mut names := [d.name(j)]
+		lo, hi := d.attr_range(j)
+		for a := lo; a < hi; a++ {
+			if !is_ns_decl_name(d.attr_name(a)) {
+				names << d.attr_name(a)
+			}
+		}
+		for name in names {
+			colon := name.index(':') or { continue }
+			p := name[..colon]
+			if p == 'xml' || (scope[p] or { '' }) != '' || d.binds(j, p) {
+				continue
+			}
+			return p
+		}
+	}
+	return none
+}
+
+// binds reports whether element i or one above it declares the prefix p.
+fn (d &Doc) binds(i u32, p string) bool {
+	decl := 'xmlns:' + p
+	mut j := i
+	for j != no_node {
+		lo, hi := d.attr_range(j)
+		for a := lo; a < hi; a++ {
+			if d.attr_name(a) == decl {
+				return d.attr_raw(a) != ''
+			}
+		}
+		j = d.parent[j]
+	}
+	return false
+}
+
 fn (mut e Edit) drop_last_piece() {
 	mut d := e.pieces.last().doc
 	d.free()
@@ -471,82 +534,109 @@ pub fn (mut e Edit) remove(n ENode) ! {
 	if n.key == ekey(0, 1) {
 		return error('remove: the root element cannot be removed')
 	}
-	mut ne := e.nodes[n.key] or { NodeEdit{} }
-	if ne.placed {
-		mut pe := e.nodes[ne.parent] or { NodeEdit{} }
-		at := pe.ins.map(it.node).index(n.key)
-		pe.ins.delete(at)
-		e.nodes[ne.parent] = pe
-		ne.placed = false
-		ne.parent = no_key
-	} else {
-		op := e.original_parent(n.key)
-		mut pe := e.nodes[op] or { NodeEdit{} }
-		pe.lost++
-		e.nodes[op] = pe
-	}
-	ne.detached = true
-	e.nodes[n.key] = ne
+	e.detach(n.key)
 }
 
-// place puts an element that was removed under parent, as its child element number index.
+// place puts an element that is not in the document (removed, or inside a removed one) under
+// parent, as its child element number index.
 pub fn (mut e Edit) place(n ENode, parent ENode, index int) ! {
-	if !n.ok() || voidptr(n.e) != voidptr(e) {
-		return error('place: not a node of this edit set')
-	}
-	ne := e.nodes[n.key] or { NodeEdit{} }
-	if !ne.detached || ne.placed {
+	e.check_node(n, 'place')!
+	if e.in_tree(n.key) {
 		return error('place: <${n.name()}> is in the document; remove it first, or move it')
 	}
-	e.check(parent, 'place')!
+	e.relocate(n, parent, index, 'place')!
+}
+
+// move puts the element under parent as its child element number index, from wherever it is: in
+// the document or not. Nothing changes if it cannot.
+pub fn (mut e Edit) move(n ENode, parent ENode, index int) ! {
+	e.check_node(n, 'move')!
+	if n.key == ekey(0, 1) {
+		return error('move: the root element cannot be moved')
+	}
+	e.relocate(n, parent, index, 'move')!
+}
+
+// relocate checks that n can go under parent at index, which counts parent's child elements
+// without n, then takes n from where it is and puts it there.
+fn (mut e Edit) relocate(n ENode, parent ENode, index int, what string) ! {
+	e.check(parent, what)!
 	// an element cannot go under itself
 	mut a := parent.key
 	for a != no_key {
 		if a == n.key {
-			return error('place: <${n.name()}> cannot go inside itself')
+			return error('${what}: <${n.name()}> cannot go inside itself')
 		}
 		a = e.parent_of(a)
 	}
+	count := e.kids(parent.key).filter(it != n.key).len
+	if index < 0 || index > count {
+		return error('${what}: index ${index} is out of range: <${parent.name()}> has ${count} child elements')
+	}
+	e.detach(n.key)
 	e.put(n.key, parent.key, index)!
 }
 
-// move puts the element under parent as its child element number index: `remove`, then `place`.
-pub fn (mut e Edit) move(n ENode, parent ENode, index int) ! {
-	e.check(n, 'move')!
-	e.check(parent, 'move')!
-	mut a := parent.key
-	for a != no_key {
-		if a == n.key {
-			return error('move: <${n.name()}> cannot go inside itself')
+// detach takes k from where it is: out of the elements put under its parent, or out of its
+// original place.
+fn (mut e Edit) detach(k u64) {
+	mut ne := e.nodes[k] or { NodeEdit{} }
+	if ne.placed {
+		mut pe := e.nodes[ne.parent] or { NodeEdit{} }
+		mut group := pe.ins[ne.anchor] or { []u64{} }
+		group.delete(group.index(k))
+		if group.len == 0 {
+			pe.ins.delete(ne.anchor)
+		} else {
+			pe.ins[ne.anchor] = group
 		}
-		a = e.parent_of(a)
+		e.nodes[ne.parent] = pe
+		ne.placed = false
+		ne.parent = no_key
+		ne.anchor = no_key
+	} else if !ne.detached {
+		op := e.original_parent(k)
+		if op != no_key {
+			mut pe := e.nodes[op] or { NodeEdit{} }
+			pe.lost++
+			e.nodes[op] = pe
+		}
 	}
-	e.remove(n)!
-	e.place(n, parent, index)!
+	ne.detached = true
+	e.nodes[k] = ne
 }
 
-// put files k under p before what is now its child element number index.
+// put files k, which is detached, under p before what is now its child element number index.
 fn (mut e Edit) put(k u64, p u64, index int) ! {
 	list := e.kids(p)
 	if index < 0 || index > list.len {
 		return error('index ${index} is out of range: <${e.doc_of(p).name(kindex(p))}> has ${list.len} child elements')
 	}
 	mut pe := e.nodes[p] or { NodeEdit{} }
-	if index == list.len {
-		pe.ins << Insert{no_key, k}
-	} else {
+	mut anchor := no_key
+	mut before := no_key // a node put there already that k goes before
+	if index < list.len {
 		target := list[index]
-		at := pe.ins.map(it.node).index(target)
-		if at >= 0 {
-			pe.ins.insert(at, Insert{pe.ins[at].anchor, k})
+		te := e.nodes[target] or { NodeEdit{} }
+		if te.placed {
+			anchor = te.anchor
+			before = target
 		} else {
-			pe.ins << Insert{target, k}
+			anchor = target
 		}
 	}
+	mut group := pe.ins[anchor] or { []u64{} }
+	if before == no_key {
+		group << k
+	} else {
+		group.insert(group.index(before), k)
+	}
+	pe.ins[anchor] = group
 	e.nodes[p] = pe
 	mut ne := e.nodes[k] or { NodeEdit{} }
 	ne.placed = true
 	ne.parent = p
+	ne.anchor = anchor
 	e.nodes[k] = ne
 }
 
@@ -712,9 +802,15 @@ fn (mut em Emitter) start_tag(d &Doc, i u32, changes []AttrChange, decls []strin
 	}
 	mut pos := after_name // copied up to here
 	lo, hi := d.attr_range(i)
+	mut entry := map[int]int{} // an original attribute -> its entry in final
+	for k, f in final {
+		if f.src >= 0 {
+			entry[f.src] = k
+		}
+	}
 	for a := lo; a < hi; a++ {
 		vend := d.attr_off[a] + d.attr_len[a] + 1 // past the closing quote
-		k := final.map(it.src).index(int(a))
+		k := entry[int(a)] or { -1 }
 		if k < 0 {
 			// removed, with the whitespace before it
 			em.copy_in(d, pos, d.attr_lead(a))!
@@ -795,15 +891,13 @@ fn (mut em Emitter) edited_content(p EditPlan, k u64, ne NodeEdit, lo u32, hi u3
 			em.copy_in(d, pos, ind)!
 			w.text_last = false
 		}
-		for x in ne.ins {
-			if x.anchor == ck {
-				em.runs_before(mut w)!
-				if !w.text_last {
-					em.put(indent)!
-				}
-				em.placed(p, x.node)!
-				w.element_done()
+		for x in ne.ins[ck] or { [] } {
+			em.runs_before(mut w)!
+			if !w.text_last {
+				em.put(indent)!
 			}
+			em.placed(p, x)!
+			w.element_done()
 		}
 		if d.is_text(c) {
 			if !w.set {
@@ -848,15 +942,13 @@ fn (mut em Emitter) edited_content(p EditPlan, k u64, ne NodeEdit, lo u32, hi u3
 		em.copy_in(d, pos, ws)!
 		w.text_last = false
 	}
-	for x in ne.ins {
-		if x.anchor == no_key {
-			em.runs_before(mut w)!
-			if !w.text_last {
-				em.put(indent_last)!
-			}
-			em.placed(p, x.node)!
-			w.element_done()
+	for x in ne.ins[no_key] or { [] } {
+		em.runs_before(mut w)!
+		if !w.text_last {
+			em.put(indent_last)!
 		}
+		em.placed(p, x)!
+		w.element_done()
 	}
 	w.count = max_int
 	em.runs_before(mut w)!
@@ -968,10 +1060,8 @@ fn (e &Edit) carried_decls(k u64) []string {
 fn (e &Edit) own_decls(k u64) map[string]string {
 	mut out := map[string]string{}
 	for a in ENode{e, k}.attrs() {
-		if a.name == 'xmlns' {
-			out[''] = a.value
-		} else if a.name.starts_with('xmlns:') {
-			out[a.name[6..]] = a.value
+		if is_ns_decl_name(a.name) {
+			out[decl_prefix(a.name)] = a.value
 		}
 	}
 	return out
@@ -982,27 +1072,16 @@ fn (e &Edit) own_decls(k u64) map[string]string {
 fn (e &Edit) source_scope(k u64) map[string]string {
 	d := e.doc_of(k)
 	mut out := e.pieces[kpiece(k)].scope.clone()
-	mut seen := map[string]bool{}
-	mut a := d.parent[kindex(k)]
-	for a != no_node {
-		lo, hi := d.attr_range(a)
-		for x := lo; x < hi; x++ {
-			name := d.attr_name(x)
-			p := if name == 'xmlns' {
-				''
-			} else if name.starts_with('xmlns:') {
-				name[6..]
-			} else {
-				continue
-			}
-			if p !in seen {
-				seen[p] = true
-				out[p] = d.attr_value(x)
-			}
-		}
-		a = d.parent[a]
+	for x in d.inherited_ns_decls(kindex(k)) {
+		out[decl_prefix(d.attr_name(x))] = d.attr_value(x)
 	}
 	return out
+}
+
+// decl_prefix is the prefix a namespace declaration binds: '' for `xmlns`, p for `xmlns:p`.
+@[inline]
+fn decl_prefix(name string) string {
+	return if name == 'xmlns' { '' } else { name['xmlns:'.len..] }
 }
 
 // scope_in is the bindings in scope inside element k of the edited document: its own

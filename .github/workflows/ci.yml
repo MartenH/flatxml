@@ -51,6 +51,12 @@ jobs:
           bin/flatxml roundtrip --nodes testdata "$RUNNER_TEMP/gen_8.xml"
           bin/flatxml roundtrip --rewrite testdata "$RUNNER_TEMP/gen_8.xml"
 
+      - name: Edits from the command line
+        run: |
+          printf 'attr\t/\tk\tv\ninsert\t/\t0\t<n/>\nmove\t/1\t0\t/0\n' | bin/flatxml edit testdata/tricky.xml "$RUNNER_TEMP/edited.xml" -
+          bin/flatxml roundtrip "$RUNNER_TEMP/edited.xml"
+          if printf 'insert\t/abc\t0\t<z/>\n' | bin/flatxml edit testdata/tricky.xml - -; then exit 1; fi
+
       - name: A generated document is valid against its schema
         run: bin/flatxml validate testdata/inventory.xsd "$RUNNER_TEMP/gen_8.xml"
 
