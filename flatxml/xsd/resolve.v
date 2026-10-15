@@ -46,15 +46,22 @@ fn (mut r Reader) resolve() ! {
 				} else {
 					r.s.complex_types[p.slot].attrs[p.sub] = use
 				}
+				for k in p.notes_lo .. p.notes_hi {
+					r.s.appinfo[k] = Appinfo{
+						...r.s.appinfo[k]
+						attr: decl
+					}
+				}
 			}
 			.group_ref {
-				root := r.s.groups[p.name.key()] or {
+				mg := r.s.groups[p.name.key()] or {
 					return r.at(p, 'group ${r.s.qname(p.name)} is not declared')
 				}
-				g := r.s.particles[root]
+				g := r.s.particles[r.s.mgroups[mg].root]
 				r.s.particles[p.slot].kind = g.kind
 				r.s.particles[p.slot].term = g.term
 				r.s.particles[p.slot].count = g.count
+				r.s.particles[p.slot].group = mg
 			}
 			.agroup_ref {
 				g := r.s.attr_groups[p.name.key()] or {
@@ -76,8 +83,11 @@ fn (mut r Reader) resolve() ! {
 	for k in 0 .. r.s.simple_types.len {
 		r.finish_simple_type(u32(k))!
 	}
-	// Each complex type gets the attributes of the groups it references; a use reached through
-	// two groups is one use.
+	// Each attribute group gets the attributes of the groups it references, then each complex
+	// type those of the groups it references; a use reached through two groups is one use.
+	for g in 0 .. r.s.agroups.len {
+		r.flatten(u32(g))!
+	}
 	for ct in 0 .. r.s.complex_types.len {
 		for g in r.ct_agroups[u32(ct)] or { []u32{} } {
 			attrs := r.flatten(g)!
@@ -284,12 +294,7 @@ fn (r &Reader) st_name(st u32) string {
 }
 
 fn (r &Reader) agroup_name(g u32) string {
-	for k, v in r.s.attr_groups {
-		if v == g {
-			return r.s.qname(QName{u32(k >> 32), u32(k)})
-		}
-	}
-	return '#${g}'
+	return r.s.qname(r.s.agroups[g].name)
 }
 
 // check_group_cycles refuses a content model that contains itself through group references,

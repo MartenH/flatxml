@@ -21,6 +21,8 @@ struct Pending {
 	sub      u32
 	in_group bool // attr_ref and agroup_ref: the owner is an attribute group
 	required bool // attr_ref: the use's `use`
+	notes_lo u32  // attr_ref: the appinfo entries written on the reference, notes_lo .. notes_hi
+	notes_hi u32
 	name     QName
 	doc      u32
 	node     u32
@@ -35,6 +37,7 @@ struct DocCtx {
 	elem_qualified bool
 	attr_qualified bool
 	dir            string
+	file           u32 // its index in the schema's files
 }
 
 struct Reader {
@@ -50,6 +53,15 @@ mut:
 	agroup_ord map[u64]u32   // attribute group references made so far, per owner
 	st_where   []Pending     // per simple type: where it is declared (doc and node), for messages
 	st_done    []u8          // finish_simple_types: 0 not yet, 1 in progress, 2 done
+	lines      []LineCursor  // per document: the position last asked for, for line_col
+}
+
+// LineCursor is a source offset and the line it is on, counted from the start of the document.
+struct LineCursor {
+mut:
+	off   int
+	line  u32 = 1
+	start int // where that line starts
 }
 
 // load reads and compiles the schema documents at paths, and the documents they import.
@@ -70,6 +82,7 @@ pub fn load(paths ...string) !&Schema {
 		r.read_file(p)!
 	}
 	r.resolve()!
+	s.index_appinfo()
 	return s
 }
 
@@ -90,10 +103,11 @@ fn (mut r Reader) read_file(path string) !string {
 	}
 	r.s.files << path.clone()
 	c0 := DocCtx{
-		d:   d
-		di:  u32(r.docs.len - 1)
-		xs:  xs
-		dir: os.dir(path)
+		d:    d
+		di:   u32(r.docs.len - 1)
+		xs:   xs
+		dir:  os.dir(path)
+		file: u32(r.s.files.len - 1)
 	}
 	// an import is read in the middle of its importer, whose ids come back after it
 	outer := r.ids
@@ -325,7 +339,11 @@ fn (mut r Reader) group_def(c DocCtx, i u32) ! {
 	if root == no_particle {
 		return error('${c.d.pos(i)}: group ${r.s.qname(q)} has no sequence or choice')
 	}
-	r.s.groups[q.key()] = root
+	r.s.groups[q.key()] = u32(r.s.mgroups.len)
+	r.s.mgroups << ModelGroup{
+		name: q
+		root: root
+	}
 	for n in notes {
 		r.annotation(c, n, .group, root, 0)!
 	}
@@ -469,18 +487,21 @@ fn (mut r Reader) attribute_use(c DocCtx, i u32, owner u32, in_group bool) ! {
 			}
 		}
 		sub := u32(if in_group { r.s.agroups[owner].attrs.len } else { r.s.complex_types[owner].attrs.len })
+		notes_lo := u32(r.s.appinfo.len)
+		r.only_annotations(c, i, if in_group { .group_attribute_use } else { .attribute_use },
+			owner, int(sub))!
 		r.pending << Pending{
 			kind:     .attr_ref
 			slot:     owner
 			sub:      sub
 			in_group: in_group
 			required: required
+			notes_lo: notes_lo
+			notes_hi: u32(r.s.appinfo.len)
 			name:     r.qname_value(c, i, ref)!
 			doc:      c.di
 			node:     i
 		}
-		r.only_annotations(c, i, if in_group { .group_attribute_use } else { .attribute_use },
-			owner, int(sub))!
 	} else {
 		qualified := match c.d.attr(i, 'form') or { '' } {
 			'' { c.attr_qualified }
@@ -540,7 +561,9 @@ fn (mut r Reader) attr_group_def(c DocCtx, i u32) ! {
 		return error('${c.d.pos(i)}: attribute group ${r.s.qname(q)} is declared twice')
 	}
 	g := u32(r.s.agroups.len)
-	r.s.agroups << AttrGroup{}
+	r.s.agroups << AttrGroup{
+		name: q
+	}
 	r.s.attr_groups[q.key()] = g
 	for ch in r.xs_children(c, i)! {
 		match c.d.local_name(ch) {
@@ -550,6 +573,7 @@ fn (mut r Reader) attr_group_def(c DocCtx, i u32) ! {
 			else { return r.refuse(c, ch) }
 		}
 	}
+	r.s.agroups[g].own = u32(r.s.agroups[g].attrs.len)
 }
 
 // agroup_use reads a reference to an attribute group from a complex type or another group.
@@ -692,12 +716,17 @@ fn (mut r Reader) annotation(c DocCtx, i u32, owner OwnerKind, idx u32, sub int)
 	for ch in r.xs_children(c, i)! {
 		match c.d.local_name(ch) {
 			'appinfo' {
+				line, col := r.line_col(c, int(c.d.src_off[ch]))
 				r.s.appinfo << Appinfo{
 					owner:  owner
 					idx:    idx
 					sub:    u32(sub)
 					source: (c.d.attr(ch, 'source') or { '' }).clone()
 					text:   c.d.inner_xml(ch)
+					attr:   if owner == .attribute { idx } else { no_attr }
+					file:   c.file
+					line:   line
+					col:    col
 				}
 			}
 			'documentation' {}
@@ -706,6 +735,51 @@ fn (mut r Reader) annotation(c DocCtx, i u32, owner OwnerKind, idx u32, sub int)
 			}
 		}
 	}
+}
+
+// line_col is the line and column (from 1, the column in bytes) of offset off in document c. It
+// counts the lines between off and the offset asked for last in the same document, so asking in
+// document order reads each document once.
+fn (mut r Reader) line_col(c DocCtx, off int) (u32, u32) {
+	for r.lines.len <= int(c.di) {
+		r.lines << LineCursor{}
+	}
+	mut lc := r.lines[c.di]
+	src := c.d.src
+	if off >= lc.off {
+		lc.line += count_newlines(src, lc.off, off)
+		// the line starts after the last newline before off, if one was passed
+		mut k := off
+		for k > lc.off && unsafe { src[k - 1] } != `\n` {
+			k--
+		}
+		if k > lc.off {
+			lc.start = k
+		}
+	} else {
+		lc.line -= count_newlines(src, off, lc.off)
+		if off < lc.start {
+			// a line before the one the cursor was on: find where it starts
+			mut k := off
+			for k > 0 && unsafe { src[k - 1] } != `\n` {
+				k--
+			}
+			lc.start = k
+		}
+	}
+	lc.off = off
+	r.lines[c.di] = lc
+	return lc.line, u32(off - lc.start + 1)
+}
+
+// count_newlines is how many newlines src holds from a to b.
+@[direct_array_access]
+fn count_newlines(src &u8, a int, b int) u32 {
+	mut n := u32(0)
+	for k in a .. b {
+		n += u32(unsafe { src[k] } == `\n`)
+	}
+	return n
 }
 
 // only_annotations accepts nothing under i but annotations.

@@ -107,7 +107,9 @@ pub enum ParticleKind {
 }
 
 // Particle is a piece of a content model. An element particle's `term` is its declaration; a
-// sequence or choice has `count` children, at `children[term .. term + count]`.
+// sequence or choice has `count` children, at `children[term .. term + count]`. A reference to a
+// named model group becomes a copy of the group's sequence or choice, with the reference's own
+// counts, and keeps which group it names in `group`.
 pub struct Particle {
 pub mut:
 	kind  ParticleKind
@@ -115,9 +117,35 @@ pub mut:
 	max   u32 = 1
 	term  u32
 	count u32
+	group u32 = no_group // the named model group referenced here (an index into `groups()`)
 }
 
 pub const no_particle = u32(0)
+
+// no_group is a particle's `group` when it is not a group reference.
+pub const no_group = u32(0xFFFF_FFFF)
+
+// no_attr is an Appinfo's `attr` when it does not annotate an attribute.
+pub const no_attr = u32(0xFFFF_FFFF)
+
+// ModelGroup is a named model group (`xsd:group name=...`): its name and the sequence or choice it
+// holds.
+pub struct ModelGroup {
+pub:
+	name QName
+	root u32
+}
+
+// AttributeGroup is a named attribute group: its name and the attribute uses it gives a type that
+// references it. The first `own` uses are those written in the group itself, in order (so a
+// `group_attribute_use` annotation's `sub` indexes them); the rest come from the attribute groups
+// it references.
+pub struct AttributeGroup {
+pub:
+	name QName
+	uses []AttrUse
+	own  u32
+}
 
 // OwnerKind says what an annotation belongs to, and so what Appinfo's idx and sub mean.
 pub enum OwnerKind {
@@ -130,7 +158,7 @@ pub enum OwnerKind {
 	attribute_group // idx: index into the schema's attribute groups
 	enumeration     // idx: simple type, sub: the value's index
 	particle        // idx: a sequence, choice, element reference or group reference
-	attribute_use   // idx: complex type, sub: the use's index (an attribute reference)
+	attribute_use   // idx: complex type, sub: the use's index as written (an attribute reference)
 	group_attribute_use // idx: attribute group, sub: the use's index (an attribute reference)
 	attribute_group_ref // idx: complex type, sub: the reference's ordinal in it
 	group_attribute_group_ref // idx: attribute group, sub: the reference's ordinal in it
@@ -145,6 +173,14 @@ pub:
 	sub    u32
 	source string
 	text   string
+	// the attribute declaration annotated, for the owners attribute, attribute_use and
+	// group_attribute_use (a reference's declaration, once resolved); no_attr for the others
+	attr u32 = no_attr
+	// where the xsd:appinfo is written: a schema document (an index into `files`), and its line
+	// and column (from 1, the column in bytes)
+	file u32
+	line u32
+	col  u32
 }
 
 @[heap]
@@ -169,15 +205,20 @@ mut:
 	global_attrs  map[u64]u32
 	named_simple  map[u64]u32
 	named_complex map[u64]u32
-	groups        map[u64]u32 // model group name -> its root particle
+	groups        map[u64]u32 // model group name -> index into mgroups
+	mgroups       []ModelGroup
 	attr_groups   map[u64]u32 // attribute group name -> index into agroups
 	agroups       []AttrGroup
+	appinfo_head  map[u64]u32 // owner kind and idx -> its first entry in appinfo
+	appinfo_next  []u32       // per entry: the owner's next entry, or no_attr
 }
 
 struct AttrGroup {
 mut:
+	name  QName
 	attrs []AttrUse
-	refs  []u32 // indices into the pending references naming other attribute groups
+	own   u32   // how many of attrs are written in the group itself
+	refs  []u32 // the attribute groups it references
 	done  bool
 	busy  bool
 }
@@ -227,6 +268,77 @@ pub fn (s &Schema) simple_type_named(uri string, local string) ?u32 {
 	ns := s.uri_ids[uri] or { return none }
 	l := s.name_ids[local] or { return none }
 	return s.named_simple[QName{ns, l}.key()] or { return none }
+}
+
+// groups are the named model groups, in the order they were read.
+pub fn (s &Schema) groups() []ModelGroup {
+	return s.mgroups
+}
+
+// group_named is the named model group {uri}local, an index into `groups()`.
+pub fn (s &Schema) group_named(uri string, local string) ?u32 {
+	ns := s.uri_ids[uri] or { return none }
+	l := s.name_ids[local] or { return none }
+	return s.groups[QName{ns, l}.key()] or { return none }
+}
+
+// attribute_groups are the named attribute groups, in the order they were read.
+pub fn (s &Schema) attribute_groups() []AttributeGroup {
+	return s.agroups.map(AttributeGroup{
+		name: it.name
+		uses: it.attrs
+		own:  it.own
+	})
+}
+
+// attribute_group_named is the named attribute group {uri}local, an index into
+// `attribute_groups()`.
+pub fn (s &Schema) attribute_group_named(uri string, local string) ?u32 {
+	ns := s.uri_ids[uri] or { return none }
+	l := s.name_ids[local] or { return none }
+	return s.attr_groups[QName{ns, l}.key()] or { return none }
+}
+
+// appinfo_pos is where an appinfo entry is written, as `path:line:col`.
+pub fn (s &Schema) appinfo_pos(a Appinfo) string {
+	return '${s.files[a.file]}:${a.line}:${a.col}'
+}
+
+// appinfo_of is the appinfo of one owner: owner kind, idx and sub as `Appinfo` has them, in the
+// order they were read.
+pub fn (s &Schema) appinfo_of(owner OwnerKind, idx u32, sub u32) []Appinfo {
+	mut out := []Appinfo{}
+	mut k := s.appinfo_head[appinfo_key(owner, idx)] or { return out }
+	for k != no_attr {
+		if s.appinfo[k].sub == sub {
+			out << s.appinfo[k]
+		}
+		k = s.appinfo_next[k]
+	}
+	return out
+}
+
+@[inline]
+fn appinfo_key(owner OwnerKind, idx u32) u64 {
+	return u64(owner) << 32 | u64(idx)
+}
+
+// index_appinfo chains every appinfo entry to the next one of the same owner, for `appinfo_of`.
+// An owner's entries are mostly adjacent, so the table is asked once per run of them.
+fn (mut s Schema) index_appinfo() {
+	s.appinfo_head = map[u64]u32{}
+	s.appinfo_next = []u32{len: s.appinfo.len, init: no_attr}
+	mut prev := u64(0xFFFF_FFFF_FFFF_FFFF)
+	for k := s.appinfo.len - 1; k >= 0; k-- {
+		key := appinfo_key(s.appinfo[k].owner, s.appinfo[k].idx)
+		if key == prev {
+			s.appinfo_next[k] = u32(k + 1)
+		} else {
+			s.appinfo_next[k] = s.appinfo_head[key] or { no_attr }
+		}
+		s.appinfo_head[key] = u32(k)
+		prev = key
+	}
 }
 
 // particle_children are the children of a sequence or choice particle.

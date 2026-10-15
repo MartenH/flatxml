@@ -104,7 +104,12 @@ they import, resolves every reference, expands groups and attribute groups, and 
 that extends another its base's content and attributes. It supports the subset of XSD 1.0 in
 the plan and refuses everything else by name and position (`xsd:all at s.xsd:12:5: ... not
 supported`), because a validator that skips a constraint calls invalid documents valid. Each
-`xsd:appinfo` is kept for the consumer, its content written back as XML.
+`xsd:appinfo` is kept for the consumer, its content written back as XML, with its owner, where
+it is written (`appinfo_pos`), and for an attribute or a reference to one, the attribute
+declaration it is about; `appinfo_of` finds an owner's entries. Expanding a group keeps its
+identity: a group reference becomes the group's sequence or choice and names the group it
+includes (`Particle.group`), and the named model groups and attribute groups can be read
+(`groups()`, `attribute_groups()`).
 
 `xsd.validate(mut doc, schema)` checks a document against a compiled schema. It gives each
 element the declaration its context names (one more array beside the nodes) and reports what the
