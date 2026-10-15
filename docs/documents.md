@@ -33,19 +33,28 @@ annotations are kept for that), but none is needed.
    no check at every step; typed reads take a default. Children and descendants are iterated
    without allocating. Paths (`find('a/b')`, `iter('item')`) compile once into name ids.
 3. **Rules** (built). A `RuleSet` is a list of `Rule`s, one per aggregation: the children named
-   (or any child) of an element named (or any element). A child takes the rule for its parent's
-   name and its own, else its parent's name and any child, else any parent and its own name,
-   else any parent and any child. A rule is one of three kinds:
+   (or any child) of a parent the rule names. A parent is named by its element name (`b`), by
+   the names of its nearest ancestors too (`a/b`: a `b` whose parent is an `a`), by a class
+   the set's classifier gives it (`%c`, a callback over the merged parent, for what names
+   cannot say), or as any parent. The most specific wins: the class, then the longest path,
+   then the name alone, then any parent; for each, the rule for the child's own name before
+   the rule for any child. So one wrapper name can hold children keyed and merged under one
+   kind of holder and each its own under another. Which rules apply to a parent is worked out
+   once per parent name, class and set of matching paths, so the rules cost nothing per child
+   that the names alone did not. A rule is one of three kinds:
    - **keyed**: the key is the texts at one or more paths below the child (`NAME`, `ITEM/ID`,
-     `@id`, `ITEM/@id`), or what a callback returns, where paths cannot say it. With `merge`,
-     children of one key (from any files) are one child; without, the second is a collision.
-     A child missing every part of its key is reported and kept, as a child of its own;
+     `@id`, `ITEM/@id`; a part ending in `+` reads every occurrence, in order, joined with a
+     separator text cannot hold: `REFS/REF+`), or what a callback returns, where paths cannot
+     say it. With `merge`, children of one key (from any files) are one child; without, the
+     second is a collision. A child missing every part of its key is, per rule (`keyless`),
+     reported and kept as a child of its own, or the one child of its name with the empty key,
+     which merges like a single child and, like one, is transparent to keys below it;
    - **single**: one child of each name, identified by its name, so the occurrences in every
      fragment of the parent are one child (with `merge`; without, the second is a collision);
    - **each**: every occurrence is a child of its own. A child no rule names is of this kind.
 
    A keyed or each rule can be **ordered** (all its children from one file, kept as written)
-   and have a **max**. Keys are compared as written or, for the whole set, ignoring ASCII case,
+   and have a **max**, both over all the names it holds together. Keys are compared as written or, for the whole set, ignoring ASCII case,
    and the set can name attributes whose values may differ. Paths compile once to name ids.
    An element's identity is the path of keys from the root, the same in every file that holds
    it: a key is unique in its **scope**, the nearest ancestor that is not single (a keyed or
@@ -54,6 +63,18 @@ annotations are kept for that), but none is needed.
    from text, one per line (`ITEMS ITEM key=NAME merge`), with the set's settings on lines that
    start with `!`, which no element name can (`!fold`, `!ignore ID`). A schema's annotations
    can be read into rules, by the caller that knows what they mean.
+
+   *Not expressed: items with no element of their own*, such as a wrapper holding, per item, a
+   run of elements of a group (`<NAME/><VALUE/><NAME/><VALUE/>`, an item starting at each
+   `NAME`). Every merged node is a list of `(document, element)` fragments, and everything
+   built on the view relies on that: positions, the subtree hash and the order of a node's
+   children (diff), the bytes an edit copies or replaces (edits, writing). A run-item could be
+   anchored at its first element, with its other elements as its children; but then the
+   anchor would be both the item and its own first member, an edit removing the item would
+   have to remove the run, and the writer would have to copy runs rather than subtrees. That is
+   a change to every layer, so it waits for a consumer that needs it; until then such a wrapper
+   is merged by the rules of its run's elements (each element of the run keyed or single by
+   its own name), which keeps what the files say but not which elements made one item.
 4. **Diff** (built). `diff(old, new)` compares two merged views: two sets, each read by the
    same rules, or two documents (`diff_docs`, `Doc.view`), which with no rules are each their own
    tree. So the files a model is kept in, and the order the rules impose, are not changes. The
@@ -167,7 +188,11 @@ Round trips, which need no oracle:
    about 0.25 µs each, and 1.37M children by name and key in about 12 ns each. The rules find
    540 problems, all values that differ: 534 in two attributes that differ from file to file
    (one names the schema, one is an identifier), which `!ignore` leaves out, and 6 in the text
-   of two copies of one definition.
+   of two copies of one definition. Rules by ancestor path and by class, keys of every
+   occurrence and an empty key for children without one came next, at no cost to a set that
+   does not use them: on a loaded machine, six runs each took 264–319 ms against 264–311 ms
+   before, and 280–317 ms with a path rule beside every rule of the set (1,873 rules), so that
+   every parent's ancestors are read.
 4. **Diff** (design 4, done), and `flatxml diff [--rules FILE] A B`: two files, directories or
    lists, the changes with their paths and positions, exit 0 when there are none and 1 when
    there are. Diffs of 400 random documents, each changed by one to four random edits, applied

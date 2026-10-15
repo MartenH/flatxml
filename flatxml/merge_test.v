@@ -651,3 +651,147 @@ fn test_a_split_document_merges_back() {
 	}
 	assert total_files > 400 && total_nodes > 5000
 }
+
+// --- rules scoped by context, keys of every occurrence, children without a key ----------------
+
+fn test_a_parent_named_by_its_ancestors() {
+	files := {
+		'a.xml': '<r><h1 n="1"><w><i id="x"/></w></h1><h2 n="2"><w><i id="x"/></w></h2></r>'
+		'b.xml': '<r><h1 n="1"><w><i id="x"/></w></h1><h2 n="2"><w><i id="x"/></w></h2></r>'
+	}
+	// one wrapper name under two holders: keyed and merged under one, each its own under the other
+	m := merged(files, '
+r h1,h2 key=@n merge
+* w single merge
+w i key=@id merge
+h2/w i
+')
+	assert m.problems.len == 0
+	assert names_of(m.at_path('/1').child('w', '')) == ['i:x']
+	assert m.at_path('/1/x').fragment_count() == 2
+	assert names_of(m.at_path('/2').child('w', '')) == ['i', 'i']
+	// the longest path wins
+	deep := merged({
+		'a.xml': '<r><a><b><w><i id="x"/><i id="x"/></w></b></a><b><w><i id="x"/><i id="x"/></w></b></r>'
+	}, '
+r a,b single merge
+a b single merge
+* w single merge
+b/w i key=@id merge
+a/b/w i
+')
+	assert names_of(deep.root().child('a', '').child('b', '').child('w', '')) == ['i', 'i']
+	assert names_of(deep.root().child('b', '').child('w', '')) == ['i:x']
+}
+
+fn test_a_parent_named_by_its_class() {
+	s := set_of({
+		'a.xml': '<r><h k="list"><w><i id="x"/><i id="x"/></w></h><h k="set"><w><i id="x"/><i id="x"/></w></h></r>'
+	})
+	rules := RuleSet{
+		rules:    [
+			Rule{
+				parent:   'r'
+				children: ['h']
+				key:      ['@k']
+				merge:    true
+			},
+			Rule{
+				parent:   '*'
+				children: ['w']
+				single:   true
+				merge:    true
+			},
+			Rule{
+				parent:   'h/w'
+				children: ['i']
+				key:      ['@id']
+				merge:    true
+			},
+			Rule{
+				parent:   '%list'
+				children: ['i']
+			},
+		]
+		classify: fn (p MNode) string {
+			return if p.name() == 'w' && p.parent().key() == 'list' { 'list' } else { '' }
+		}
+	}
+	m := s.merge(rules) or { panic(err) }
+	// the class wins over the path where the classifier gives one
+	assert names_of(m.at_path('/list').child('w', '')) == ['i', 'i']
+	assert names_of(m.at_path('/set').child('w', '')) == ['i:x']
+	// read from text, the rules take their classifier after
+	text := parse_rules('r h key=@k merge\n* w single merge\nh/w i key=@id merge\n%list i') or {
+		panic(err)
+	}
+	t := s.merge(RuleSet{
+		...text
+		classify: rules.classify
+	}) or { panic(err) }
+	assert names_of(t.at_path('/list').child('w', '')) == ['i', 'i']
+	// a class needs a classifier, and a path is of names
+	for bad in ['%c i', 'a/*/b i', 'a//b i', 'a/%c i'] {
+		rs := parse_rules(bad) or { panic(err) }
+		if _ := s.merge(rs) {
+			assert false, bad
+		}
+	}
+}
+
+fn test_a_key_of_every_occurrence() {
+	m := merged({
+		'a.xml': '<r><s><ref>a</ref><ref>b</ref></s><s><ref>a</ref><ref>c</ref></s></r>'
+		'b.xml': '<r><s><ref>a</ref><ref>b</ref></s><s/></r>'
+	}, 'r s key=ref+ merge')
+	assert names_of(m.root()) == ['s:a${key_list_sep}b', 's:a${key_list_sep}c', 's']
+	assert m.root().child('s', 'a${key_list_sep}b').fragment_count() == 2
+	assert kinds(m) == [.missing_key]
+	attrs := merged({
+		'a.xml': '<r><s><v k="2"/><v/><v k="1"/></s></r>'
+	}, 'r s key=v/@k+,@n')
+	assert names_of(attrs.root()) == ['s:2${key_list_sep}1${key_sep}']
+}
+
+fn test_children_without_a_key_as_one_empty_key() {
+	files := {
+		'a.xml': '<r><s><v>1</v></s><s id="a"/><t/></r>'
+		'b.xml': '<r><s><w>2</w></s><t/></r>'
+	}
+	m := merged(files, 'r s,t key=@id keyless=empty merge\n* v,w single merge')
+	// one child of each name without a key, merged, and nothing reported
+	assert m.problems.len == 0
+	assert names_of(m.root()) == ['s:a', 's', 't']
+	empty := m.root().child('s', '')
+	assert empty.fragment_count() == 2 && names_of(empty) == ['v', 'w']
+	assert m.root().child('t', '').fragment_count() == 2
+	// without merge, the second is a collision; by default, each is its own and reported
+	assert kinds(merged(files, 'r s,t key=@id keyless=empty')) == [.collision, .collision]
+	assert kinds(merged(files, 'r s,t key=@id merge')).filter(it == .missing_key).len == 4
+	rs := parse_rules('r s key=@id keyless=empty') or { panic(err) }
+	assert rs.rules[0].keyless == .empty
+	if _ := parse_rules('r s key=@id keyless=one') {
+		assert false
+	}
+}
+
+fn test_one_rule_over_several_names_counts_them_together() {
+	// order: every child of the aggregation, whatever its name, from one document
+	o := merged({
+		'a.xml': '<r><a>1</a></r>'
+		'b.xml': '<r><b>2</b></r>'
+	}, 'r a,b ordered')
+	assert kinds(o) == [.ordered_split]
+	assert o.root().kids().map(it.name()) == ['a']
+	// the most there may be, of every name together, each and keyed alike
+	e := merged({
+		'a.xml': '<r><a/><b/><a/></r>'
+	}, 'r a,b max=2')
+	assert kinds(e) == [.too_many]
+	assert e.root().kids().map(it.name()) == ['a', 'b']
+	k := merged({
+		'a.xml': '<r><a id="1"/><b id="2"/><a id="3"/></r>'
+	}, 'r a,b key=@id max=2')
+	assert kinds(k) == [.too_many]
+	assert names_of(k.root()) == ['a:1', 'b:2']
+}

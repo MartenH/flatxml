@@ -110,10 +110,11 @@ struct Out {
 	hi   int
 }
 
-// Run is order[lo .. hi]: kids of one key.
+// Run is order[lo .. hi]: kids of one key, or, empty, of one name and no key.
 struct Run {
-	lo int
-	hi int
+	lo    int
+	hi    int
+	empty bool
 }
 
 // merge reads the set's documents as one, by the rules: a view over them, and what the rules
@@ -235,7 +236,7 @@ fn (mut m Merged) add_node(name u32, parent u32, scope u32, rule u32, kind MKind
 @[direct_array_access]
 fn (mut m Merged) expand(p u32) {
 	m.nkids, m.nouts, m.nout_frags = 0, 0, 0
-	pname := m.name[p]
+	mut ctx := no_rule // the parent's context, found at its first child element
 	mut sorted := true
 	mut last_rule := u32(0)
 	for f := m.frag_lo[p]; f < m.frag_lo[p + 1]; f++ {
@@ -246,7 +247,10 @@ fn (mut m Merged) expand(p u32) {
 		for c < stop {
 			t := d.tag[c]
 			if t != text_tag {
-				r := m.rules.resolve(pname, t)
+				if ctx == no_rule {
+					ctx = m.rules.context(m, p)
+				}
+				r := m.rules.resolve(ctx, t)
 				sorted = sorted && r >= last_rule
 				last_rule = r
 				room(mut m.kids, m.nkids)
@@ -445,8 +449,30 @@ fn (mut m Merged) keyed(p u32, rule &CRule, r u32, k int, e int) {
 		for h < m.order.len && compare_keys(keys[m.order[g] - k], keys[m.order[h] - k], fold) == 0 {
 			h++
 		}
-		m.runs << Run{g, h}
+		m.runs << Run{
+			lo: g
+			hi: h
+		}
 		g = h
+	}
+	// with keyless=empty, the children of one name without a key are one, of the empty key
+	if rule.keyless == .empty && missing.len > 0 {
+		mut seen := map[u32]bool{}
+		for j in missing {
+			t := m.kids[j].tag
+			if seen[t] {
+				continue
+			}
+			seen[t] = true
+			lo := m.order.len
+			for i in missing {
+				if m.kids[i].tag == t {
+					m.order << i
+				}
+			}
+			m.runs << Run{lo, m.order.len, true}
+		}
+		missing.clear()
 	}
 	order := m.order
 	if rule.ordered {
@@ -498,7 +524,11 @@ fn (mut m Merged) keyed(p u32, rule &CRule, r u32, k int, e int) {
 			m.out_one(kept[x], r, .each, '')
 			x++
 		}
-		m.identity_of(p, rule, r, .keyed, keys[order[run.lo] - k], run.lo, run.hi)
+		if run.empty {
+			m.identity_of(p, rule, r, .single, '', run.lo, run.hi)
+		} else {
+			m.identity_of(p, rule, r, .keyed, keys[order[run.lo] - k], run.lo, run.hi)
+		}
 	}
 	for x < kept.len {
 		m.out_one(kept[x], r, .each, '')
