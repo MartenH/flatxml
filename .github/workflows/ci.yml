@@ -40,3 +40,9 @@ jobs:
         run: |
           ./bin/genxml "$RUNNER_TEMP/gen_8.xml" 8
           tools/check_vs_expat.py bin/flatxml testdata "$RUNNER_TEMP/gen_8.xml"
+          tools/check_vs_expat.py --ns bin/flatxml testdata "$RUNNER_TEMP/gen_8.xml"
+
+      - name: Mutation fuzzing against expat
+        run: |
+          tools/fuzz_vs_expat.py --count 500 --seed 1 --keep "$RUNNER_TEMP/fuzz" bin/flatxml testdata/tricky.xml testdata/namespaces.xml
+          tools/fuzz_vs_expat.py --ns --count 500 --seed 2 --keep "$RUNNER_TEMP/fuzz" bin/flatxml testdata/tricky.xml testdata/namespaces.xml
