@@ -827,3 +827,111 @@ fn test_one_rule_over_several_names_counts_them_together() {
 	assert kinds(k) == [.too_many]
 	assert names_of(k.root()) == ['a:1', 'b:2']
 }
+
+fn test_a_key_part_can_be_the_own_text() {
+	rs := parse_rules('r item key=.,@k merge') or { panic(err) }
+	assert rs.rules[0].key == ['', '@k']
+	s := set_of({
+		'a.xml': '<r><item k="1">x<sub/></item><item k="1">y</item></r>'
+		'b.xml': '<r><item k="1">x<more/></item></r>'
+	})
+	m := s.merge(rs) or { panic(err) }
+	assert m.root().kids().map(show_key(it.key())) == ['x,1', 'y,1']
+	assert m.root().kids()[0].kids().map(it.name()) == ['sub', 'more']
+}
+
+fn random_rule_set(mut seed &u64) RuleSet {
+	next := fn [mut seed] (k int) int {
+		unsafe {
+			*seed ^= *seed << 13
+			*seed ^= *seed >> 7
+			*seed ^= *seed << 17
+			return int(*seed % u64(k))
+		}
+	}
+	pick := fn [next] (xs []string) string {
+		return xs[next(xs.len)]
+	}
+	mut rules := []Rule{}
+	for _ in 0 .. next(5) {
+		mut children := []string{}
+		if next(3) == 0 {
+			children = ['*']
+		} else {
+			for _ in 0 .. 1 + next(3) {
+				children << pick(['a', 'b', 'p:c', 'item', 'x-y', 'ü'])
+			}
+		}
+		mut key := []string{}
+		if next(2) == 0 {
+			for _ in 0 .. 1 + next(3) {
+				key << pick(['', 'NAME', 'ITEM/ID', '@id', 'ITEM/@id', 'REFS/REF+', 'a/b/c'])
+			}
+		}
+		rules << Rule{
+			parent:   pick(['*', 'a', 'a/b', '%c', 'x/y/z', 'fold'])
+			children: children
+			key:      key
+			keyless:  if key.len > 0 && next(2) == 0 { Keyless.empty } else { Keyless.own }
+			single:   key.len == 0 && next(2) == 0
+			merge:    next(2) == 0
+			ordered:  next(2) == 0
+			max:      next(4)
+		}
+	}
+	mut ignore := []string{}
+	for _ in 0 .. next(3) {
+		ignore << pick(['id', 'x:y', 'uuid'])
+	}
+	return RuleSet{
+		rules:        rules
+		fold:         next(2) == 0
+		ignore_attrs: ignore
+	}
+}
+
+fn test_rule_sets_are_written_and_read_back() {
+	mut seed := u64(0x9E3779B97F4A7C15)
+	for _ in 0 .. 2000 {
+		rs := random_rule_set(mut &seed)
+		text := format_rules(rs) or { panic(err) }
+		back := parse_rules(text) or { panic('${err}\n${text}') }
+		assert back.fold == rs.fold && back.ignore_attrs == rs.ignore_attrs, text
+		assert back.rules.len == rs.rules.len, text
+		for k, r in rs.rules {
+			b := back.rules[k]
+			assert b.parent == r.parent && b.children == r.children && b.key == r.key, text
+			assert b.keyless == r.keyless && b.single == r.single && b.merge == r.merge, text
+			assert b.ordered == r.ordered && b.max == r.max && b.key_fn == none, text
+		}
+		// and written again, the same text
+		assert format_rules(back) or { '' } == text
+	}
+	// what text cannot say
+	f := fn (n Node) ?string {
+		return none
+	}
+	for bad in [
+		RuleSet{ rules: [Rule{ parent: 'r', children: ['a'], key_fn: f }] },
+		RuleSet{ rules: [Rule{ parent: 'r s', children: ['a'] }] },
+		RuleSet{ rules: [Rule{ parent: '!r', children: ['a'] }] },
+		RuleSet{ rules: [Rule{ parent: 'r', children: ['a,b'] }] },
+		RuleSet{ rules: [Rule{ parent: 'r', children: ['a', ''] }] },
+		RuleSet{ rules: [Rule{ parent: 'r', children: ['a'], key: ['.'] }] },
+		RuleSet{ rules: [Rule{ parent: 'r', children: ['a'], key: ['x#y'] }] },
+		RuleSet{ rules: [Rule{ parent: 'r', children: ['a'], max: -1 }] },
+		RuleSet{ ignore_attrs: [''] },
+	] {
+		if t := format_rules(bad) {
+			assert false, t
+		}
+	}
+	// any parent or child is written `*`
+	assert format_rules(RuleSet{
+		rules: [Rule{}, Rule{
+			parent:   ''
+			children: ['']
+			key:      ['']
+		}]
+	})! == '* *\n* * key=.\n'
+}

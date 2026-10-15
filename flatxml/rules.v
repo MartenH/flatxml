@@ -75,9 +75,10 @@ pub struct Rule {
 pub:
 	parent   string   // the parent: a name, a path of ancestor names, `%class`; '' or '*' for any
 	children []string // the child element names the aggregation holds; empty (or '*') for any
-	// key is the paths below the child whose texts make its key: `NAME`, `ITEM/ID`; an attribute
-	// is `@id` (the child's own) or `ITEM/@id`; a part ending in `+` reads every occurrence, in
-	// order, joined with key_list_sep (`REFS/REF+`). A missing part reads as ''; a child missing
+	// key is the paths below the child whose texts make its key: `NAME`, `ITEM/ID`; '' is the
+	// child's own text (`.` in the text form); an attribute is `@id` (the child's own) or
+	// `ITEM/@id`; a part ending in `+` reads every occurrence, in order, joined with key_list_sep
+	// (`REFS/REF+`). A missing part reads as ''; a child missing
 	// every part has no key, and is what keyless says.
 	key     []string
 	key_fn  ?KeyFn  // the key computed by the caller, in place of key
@@ -467,7 +468,8 @@ fn (p &KeyPart) read(c Node) ?string {
 //                           [ordered] [max=<n>]
 //
 // A parent is a name, a path of ancestor names (`a/b`) or a class (`%c`); `*` stands for any
-// parent or any child. Rules that name a class need a classifier, which text cannot give:
+// parent or any child. A key part `.` is the child's own text (in a `Rule`, the part ''); no
+// element is named `.`. Rules that name a class need a classifier, which text cannot give:
 // `RuleSet{...rules, classify: f}`. A setting starts with `!`, which no element name can,
 // so every name can have a rule. Rules are listed in the order their children are written.
 pub fn parse_rules(text string) !RuleSet {
@@ -506,7 +508,7 @@ pub fn parse_rules(text string) !RuleSet {
 		mut keyless := Keyless.own
 		for w in words[2..] {
 			if w.starts_with('key=') {
-				key = w[4..].split(',').filter(it != '')
+				key = w[4..].split(',').filter(it != '').map(if it == '.' { '' } else { it })
 				if key.len == 0 {
 					return error('line ${n + 1}: an empty key')
 				}
@@ -545,5 +547,90 @@ pub fn parse_rules(text string) !RuleSet {
 		rules:        rules
 		fold:         fold
 		ignore_attrs: ignore
+	}
+}
+
+// format_rules writes a rule set as parse_rules reads it: the settings, then a rule per line, so
+// that parse_rules gives back the same set. Any parent ('' or `*`) and any child (no names, '' or
+// `*`) are written `*`, which parse_rules reads as the parent `*` and the children [`*`]. What
+// text cannot say is refused: a key function, a name holding whitespace, `,` or `#`, an empty
+// name among others, a parent starting with `!`, a key part `.` or `+`, a negative max. A classifier is not written either
+// (parse_rules never reads one); give it to the set read back.
+pub fn format_rules(rs RuleSet) !string {
+	mut lines := []string{}
+	if rs.fold {
+		lines << '!fold'
+	}
+	if rs.ignore_attrs.len > 0 {
+		for a in rs.ignore_attrs {
+			if a == '' {
+				return error('an empty ignored attribute name')
+			}
+			check_rule_word(a, 'an ignored attribute')!
+		}
+		lines << '!ignore ' + rs.ignore_attrs.join(' ')
+	}
+	for k, r in rs.rules {
+		lines << format_rule(r) or { return error('rule ${k + 1}: ${err.msg()}') }
+	}
+	return lines.join('\n') + '\n'
+}
+
+// format_rule is one rule as a line of parse_rules' text.
+fn format_rule(r Rule) !string {
+	if r.key_fn != none {
+		return error('a key function cannot be written')
+	}
+	if r.max < 0 {
+		return error('max ${r.max}')
+	}
+	parent := if any_name(r.parent) { '*' } else { r.parent }
+	check_rule_word(parent, 'the parent')!
+	if parent.starts_with('!') {
+		return error('a parent starting with `!` reads as a setting')
+	}
+	any_child := r.children.len == 0 || (r.children.len == 1 && r.children[0] == '')
+	for c in r.children {
+		if c == '' && !any_child {
+			return error('an empty child name among others')
+		}
+		check_rule_word(c, 'a child')!
+	}
+	children := if any_child { '*' } else { r.children.join(',') }
+	mut out := '${parent} ${children}'
+	if r.key.len > 0 {
+		mut parts := []string{}
+		for p in r.key {
+			if p == '.' || p == '+' {
+				return error("key part `${p}`: no element is named `.`; the own text is the part ''")
+			}
+			check_rule_word(p, 'a key part')!
+			parts << if p == '' { '.' } else { p }
+		}
+		out += ' key=' + parts.join(',')
+	}
+	if r.keyless == .empty {
+		out += ' keyless=empty'
+	}
+	if r.single {
+		out += ' single'
+	}
+	if r.merge {
+		out += ' merge'
+	}
+	if r.ordered {
+		out += ' ordered'
+	}
+	if r.max > 0 {
+		out += ' max=${r.max}'
+	}
+	return out
+}
+
+// check_rule_word fails unless w can be part of a word of parse_rules' text: without whitespace,
+// `,` or `#`.
+fn check_rule_word(w string, what string) ! {
+	if w.contains_any(' \t\r\n,#') {
+		return error('${what} `${w}` cannot be written: whitespace, `,` and `#` end a word')
 	}
 }

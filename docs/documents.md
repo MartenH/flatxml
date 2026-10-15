@@ -45,7 +45,7 @@ annotations are kept for that), but none is needed.
    and the classifier is asked only when a rule names a class, so the rules cost nothing per child
    that the names alone did not. A rule is one of three kinds:
    - **keyed**: the key is the texts at one or more paths below the child (`NAME`, `ITEM/ID`,
-     `@id`, `ITEM/@id`), or what a callback returns, where paths cannot say it. A part ending in
+     `@id`, `ITEM/@id`, or the child's own text), or what a callback returns, where paths cannot say it. A part ending in
      `+` reads every element at its path, in order, its text or attribute ('' where the attribute
      is absent, so the number and order of the elements count), joined with a separator text
      cannot hold (`REFS/REF+`); a key is shown with its parts joined by `,` and the occurrences of
@@ -62,13 +62,15 @@ annotations are kept for that), but none is needed.
    have a **max**, both over all the names it holds together. Keys are compared as written or, for
    the whole set, ignoring ASCII case, and the set can name attributes whose values may differ.
    Paths compile once to name ids. An element's identity is the path of keys from the root, the
-   same in every file that holds it: a key is unique in its **scope**, the nearest ancestor that
-   is not single (a keyed or each child, or the root), so a single child (a wrapper) is
-   transparent to keys. The rules' order is the order of their aggregations among a node's
-   children. `parse_rules` reads them from text, one per line (`ITEMS ITEM key=NAME merge`), with
-   the set's settings on lines that start with `!`, which no element name can (`!fold`,
-   `!ignore ID`). A schema's annotations can be read into rules, by the caller that knows what
-   they mean.
+   same in every file that holds it: a key is unique in its **scope**, the nearest ancestor that is
+   not single (a keyed or each child, or the root), so a single child (a wrapper) is transparent to
+   keys. The rules' order is the order of their aggregations among a node's children. `parse_rules`
+   reads them from text, one per line (`ITEMS ITEM key=NAME merge`), with the set's settings on
+   lines that start with `!`, which no element name can (`!fold`, `!ignore ID`); a key part `.` is
+   the child's own text (`key=.,@kind`), which no element name can spell either. `format_rules`
+   writes a rule set back as that text, so a set written and read back is the same set; what text
+   cannot say (a key function, the classifier) is refused or left to the caller. A schema's
+   annotations can be read into rules, by the caller that knows what they mean.
 
    *Not expressed: items with no element of their own*, such as a wrapper holding, per item, a
    run of elements of a group (`<NAME/><VALUE/><NAME/><VALUE/>`, an item starting at each
