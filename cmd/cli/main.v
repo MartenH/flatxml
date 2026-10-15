@@ -19,6 +19,8 @@
 //                                  each a file, a directory or @list (a file naming one a line),
 //                                  read as one set, merged by the rules (none: as written).
 //                                  Exits 0 when they are the same, 1 when they differ, 2 on trouble
+//   flatxml edit <in> <out|-> <script|->   apply a script of edits (see `edit_doc`) to a
+//                                  document and write it, every byte no edit touched kept
 //   flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups]
 //                 <file|dir>...    read many files as one set and merge them by the rules
 //                                  (`flatxml.parse_rules`): the merged view's size, its time,
@@ -51,6 +53,7 @@ const usage = 'usage:
   flatxml set [--ns] [--jobs N] [--ext EXT] <file|dir>...   many files as one set, timed
   flatxml write [--nodes|--rewrite] <in> <out|->   write a document back as XML
   flatxml roundtrip [--nodes|--rewrite] [--ext EXT] <file|dir>...   write and compare each
+  flatxml edit <in> <out|-> <script|->   apply a script of edits and write the document
   flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups] <file|dir>...
                                 many files merged by rules: the view, its time, the problems
   flatxml diff [--rules <file>] [--ns] [--jobs N] [--ext EXT] [--brief] <A> <B>
@@ -114,6 +117,16 @@ fn main() {
 		}
 		'roundtrip' {
 			if !round_trip(args[1..]) {
+				exit(1)
+			}
+		}
+		'edit' {
+			if args.len != 4 {
+				eprintln(usage)
+				exit(2)
+			}
+			edit_doc(args[1], args[2], args[3]) or {
+				eprintln('flatxml: ${err}')
 				exit(1)
 			}
 		}
@@ -903,4 +916,155 @@ fn diff_sets(args []string) {
 	if d.changes.len > 0 {
 		exit(1)
 	}
+}
+
+// edit_doc applies the edit script at script ('-': stdin) to the document at path and writes it
+// to out ('-': stdout). One edit per line, fields separated by tabs, values with `\\`, `\\t`,
+// `\\n` and `\\r` for a backslash, tab, newline and carriage return. An element is named by its
+// path of child element numbers from the root in the document as edited so far (`/` the root,
+// `/0/2` the third child element of the root's first):
+//
+//   text PATH VALUE            set the element's own text
+//   attr PATH NAME VALUE       set an attribute
+//   noattr PATH NAME           remove an attribute
+//   insert PATH INDEX XML      put the element XML under PATH as its child element INDEX
+//   copy PATH INDEX FROM       put a copy of element FROM of the document as read there
+//   remove PATH                remove the element
+//   move PATH INDEX FROM       move element FROM there
+fn edit_doc(path string, out string, script string) ! {
+	mut d := flatxml.parse_file(path)!
+	mut e := d.edit()
+	lines := if script == '-' { os.get_lines() } else { os.read_lines(script)! }
+	for n, line in lines {
+		if line.trim_space() == '' {
+			continue
+		}
+		f := line.split('\t').map(unescape_field(it))
+		edit_line(mut e, d, f) or { return error('${script}:${n + 1}: ${err}') }
+	}
+	if out == '-' {
+		mut o := os.stdout()
+		e.write(mut o)!
+	} else {
+		e.write_file(out)!
+	}
+	e.free()
+	d.free()
+}
+
+fn edit_line(mut e flatxml.Edit, d &flatxml.Doc, f []string) ! {
+	want := match f[0] {
+		'remove' { 2 }
+		'text', 'noattr' { 3 }
+		'attr', 'insert', 'copy', 'move' { 4 }
+		else { return error('unknown edit `${f[0]}`') }
+	}
+	if f.len != want {
+		return error('`${f[0]}` takes ${want - 1} fields')
+	}
+	n := edited_at(e, f[1])!
+	match f[0] {
+		'text' {
+			e.set_text(n, f[2])!
+		}
+		'attr' {
+			e.set_attr(n, f[2], f[3])!
+		}
+		'noattr' {
+			e.remove_attr(n, f[2])!
+		}
+		'insert' {
+			e.insert(n, field_index(f[2])!, f[3])!
+		}
+		'copy' {
+			e.insert_copy(n, field_index(f[2])!, doc_at(d, f[3])!)!
+		}
+		'remove' {
+			e.remove(n)!
+		}
+		else {
+			e.move(edited_at(e, f[3])!, n, field_index(f[2])!)!
+		}
+	}
+}
+
+// edited_at is the element at path in the edited document.
+fn edited_at(e &flatxml.Edit, path string) !flatxml.ENode {
+	mut n := e.root()
+	for part in path_parts(path)! {
+		kids := n.children()
+		k := part
+		if k >= kids.len {
+			return error('no element ${path}')
+		}
+		n = kids[k]
+	}
+	return n
+}
+
+// doc_at is the element at path in the document as read.
+fn doc_at(d &flatxml.Doc, path string) !flatxml.Node {
+	mut n := d.root_node()
+	for part in path_parts(path)! {
+		mut k := part
+		mut found := flatxml.Node{}
+		for c in n.children() {
+			if k == 0 {
+				found = c
+				break
+			}
+			k--
+		}
+		if !found.ok() {
+			return error('no element ${path}')
+		}
+		n = found
+	}
+	return n
+}
+
+// path_parts are the child element numbers of an element path: `/`, or `/` then numbers
+// separated by `/`.
+fn path_parts(path string) ![]int {
+	if !path.starts_with('/') {
+		return error('`${path}` is not a path: it starts with `/`')
+	}
+	if path == '/' {
+		return []
+	}
+	return path[1..].split('/').map(field_index(it) or {
+		return error('`${path}` is not a path: ${err}')
+	})
+}
+
+// field_index reads a number: decimal digits and nothing else.
+fn field_index(s string) !int {
+	if s == '' || s.len > 9 || !s.bytes().all(it >= `0` && it <= `9`) {
+		return error('`${s}` is not a number')
+	}
+	return s.int()
+}
+
+// unescape_field reads `\\`, `\\t`, `\\n` and `\\r` in an edit script's field.
+fn unescape_field(s string) string {
+	if !s.contains('\\') {
+		return s
+	}
+	mut sb := strings.new_builder(s.len)
+	mut k := 0
+	for k < s.len {
+		if s[k] == `\\` && k + 1 < s.len {
+			sb.write_u8(match s[k + 1] {
+				`t` { `\t` }
+				`n` { `\n` }
+				`r` { `\r` }
+				else { s[k + 1] }
+			})
+			k += 2
+			continue
+		}
+		sb.write_u8(s[k])
+		k++
+	}
+	return sb.str()
 }

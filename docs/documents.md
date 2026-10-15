@@ -215,8 +215,45 @@ Round trips, which need no oracle:
    removal and an addition, and a key shared by fragments of one node in several files splits
    it. Lists that defeat the alignment stay linear: 50,000 siblings, none equal on the other
    side, compare in 40–75 ms, and 15,000 changes among 30,000 siblings print in 50 ms in all.
-5. **Edits** (design 6), the write of an edited document, and `flatxml apply`: a diff applied to
-   its old document gives the new one; edits on a merged view, written back to their own files.
+5. **Edits** (design 6) on one document (done), the write of an edited document, and `flatxml
+   edit`. An edit set (`Doc.edit`) keeps its changes in a map keyed by node: an element is a piece
+   (0, the document; others, inserted content: a parsed fragment, or a node of any document) and
+   its index there, so edits go on inside inserted content as on the document. Text is set as a
+   string (before the first child) or as runs in slots, a diff's form. A child is put before an
+   original child of its parent (or at the end), so no list of children is rewritten, and an index
+   means the parent's child elements as edited (a diff's). Read through, an `ENode` answers name,
+   text, attributes, children and parent as edited. Written through the emitter's plan: an
+   untouched subtree is copied whole, the elements above a change are walked, and an element with
+   changes of its own is written from its source with them: its start tag copied but for the
+   attributes changed, the bytes between its children kept, a removed child taking the indentation
+   before it, an inserted one given that of the child it goes before. An element moved or copied
+   keeps the namespaces of where it was read (declarations restore those that differ, `xmlns=""`
+   included); a fragment those where it is put first.
+
+   Verified: a test per kind of edit and their combinations; 30,000 random edit sets (1 to 8 edits
+   each, of every kind, on random documents with comments, mixed content, CDATA and namespaces)
+   give, written and read back, the tree a model of the same edits gives, with every element and
+   namespace as expected, the bytes before and after the root unchanged, and every element with no
+   edit below it byte for byte what it was. Against lxml making the same edits
+   (`tools/edits_vs_lxml.py`): on the 560 real-world files, three seeds of 10 to 20 edits each
+   (28,000 edits), every tree the same; and on 33,377 other XML files found on one machine (333,770
+   edits), every tree the same (543 skipped: not read by one of the two, or not UTF-8). Written,
+   flatxml's files differ from the originals in 64,802 lines for the first seed on the 560 where
+   lxml's serialisation of the same trees differs in 77,150, and in 359,038 on the others where
+   lxml's differs in 1,015,501. An edited 500 MB document writes in the time an unedited one does
+   (0.66–0.83 s against 0.70–0.87 s to a file).
+
+   Applying a diff (`flatxml apply`, next) is a thin layer on this, and a test does it
+   (`apply_diff` in `edit_test.v`): a removed node is `remove`d, a moved one `remove`d and later
+   `place`d, an added one `insert_copy`d from the new document, at its index, lowest first, and
+   then texts (`set_text_runs`, run by run in their slots among the children) and attributes set.
+   One rule comes with it: a diff places text by slot and reports a text change only where the runs
+   differ, so an element whose children change (a child removed, added, or moved out or in) must
+   have its runs set again at their old slots, unless it has a text change of its own. Diffs
+   between 18,000 random documents and random edits of them (six seeds), applied this way, give the
+   new document (as a diff compares it). Edits on a merged view are edit sets on the documents its
+   nodes come from, one per document: a value held in several is set in each, and a new element
+   goes to the document the caller names.
 6. **Three-way merge**: two changed versions of one base.
 
 ## Techniques taken from other tools
