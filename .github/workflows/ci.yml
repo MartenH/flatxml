@@ -46,3 +46,11 @@ jobs:
         run: |
           tools/fuzz_vs_expat.py --count 500 --seed 1 --keep "$RUNNER_TEMP/fuzz" bin/flatxml testdata/tricky.xml testdata/namespaces.xml
           tools/fuzz_vs_expat.py --ns --count 500 --seed 2 --keep "$RUNNER_TEMP/fuzz" bin/flatxml testdata/tricky.xml testdata/namespaces.xml
+
+      - name: Keep the failing fuzz cases
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures
+          path: ${{ runner.temp }}/fuzz
+          if-no-files-found: ignore

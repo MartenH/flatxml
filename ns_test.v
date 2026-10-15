@@ -100,3 +100,25 @@ fn test_errors() {
 	// the position is the element's
 	assert ns_fails('<r>\n  <p:x/></r>').starts_with('<string>:2:3: ')
 }
+
+fn test_before_resolution_reserved_uris_answer() {
+	d := parse_string('<p:r xmlns:p="urn:p"/>') or { panic(err) }
+	assert d.ns_uri(d.ns_of(d.root())) == ''
+	assert d.ns_uri(xml_ns) == xml_ns_uri
+}
+
+fn test_failed_resolution_leaves_no_namespaces() {
+	mut d := parse_string('<r xmlns:a="urn:a"><p:x/></r>') or { panic(err) }
+	d.resolve_namespaces() or {}
+	assert d.ns_id('urn:a') == none
+	assert d.ns.len == 0
+}
+
+// URIs are copies: they outlive the mapped file.
+fn test_uris_outlive_the_source() {
+	mut d := parse_file('testdata/namespaces.xml') or { panic(err) }
+	d.resolve_namespaces() or { panic(err) }
+	uri := d.ns_uri(d.ns_of(d.root()))
+	d.free()
+	assert uri == 'urn:example:a'
+}

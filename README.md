@@ -61,9 +61,11 @@ Results marked *earlier* predate this repository; the parser has not changed sin
   whitespace), `namespaces.xml` (scopes, redeclaration, an undeclared default, reserved prefixes)
   and one file per namespace error, each rejected by both. *Earlier:* identical on generated
   files of 20 MB and 100 MB and on a 142 MB merged one.
-- **Mutation fuzzing** against expat (`tools/fuzz_vs_expat.py`): 24,000 random edits over six
-  seeds, with and without namespaces. No crash, no valid document refused, no tree different. The
-  cases only expat rejects are the limitations below.
+- **Mutation fuzzing** against expat (`tools/fuzz_vs_expat.py`): random edits, plus namespace
+  edits that keep a document well-formed (renaming a prefix, dropping a declaration); 24,000 cases
+  over six seeds, with and without namespaces. No crash, no valid document refused, no tree
+  different. The cases only expat rejects are the limitations below. Removing either
+  unbound-prefix check from the resolver makes the fuzzer fail within 500 cases.
 - **Past 2 GiB** (*earlier*): a 3 GB file (32.8M nodes, offsets beyond 2³¹) parses in 2.8 s.
 
 ## Benchmark

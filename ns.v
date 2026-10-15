@@ -19,12 +19,21 @@ const not_qname = u32(0xFFFF_FFFF)
 // fails on what the Namespaces recommendation makes an error: an unbound prefix, a name that is
 // not a qualified name (`a:b:c`, `:a`, `a:`), a misuse of the reserved prefixes or namespaces,
 // undeclaring a prefix, and two attributes of one element with the same expanded name.
-// A namespace declaration (`xmlns`, `xmlns:p`) is itself in the xmlns namespace.
-@[direct_array_access]
+// A namespace declaration (`xmlns`, `xmlns:p`) is itself in the xmlns namespace. On an error,
+// the document is left as it was before the call (apart from names interned for the split).
 pub fn (mut d Doc) resolve_namespaces() ! {
 	if d.ns.len == d.tag.len {
 		return
 	}
+	d.resolve() or {
+		d.ns_uris = []
+		d.ns_ids = map[string]u32{}
+		return err
+	}
+}
+
+@[direct_array_access]
+fn (mut d Doc) resolve() ! {
 	d.split_names()
 	xml_id := d.intern_str('xml')
 	xmlns_id := d.intern_str('xmlns')
@@ -201,13 +210,24 @@ fn (mut d Doc) ns_intern(uri string) u32 {
 		return id
 	}
 	id := u32(d.ns_uris.len)
-	d.ns_uris << uri
-	d.ns_ids[uri] = id
+	// a copy: the value may be a view of the source, which free() releases
+	owned := uri.clone()
+	d.ns_uris << owned
+	d.ns_ids[owned] = id
 	return id
 }
 
 // --- reading resolved names ------------------------------------------------------------------
-// These need `resolve_namespaces` to have run; before it, ns_of and attr_ns_of answer 0.
+// Before `resolve_namespaces` has run, ns_of and attr_ns_of answer no_ns and ns_uri knows the
+// reserved ids; the local-name readers need it to have run, and say so.
+
+const reserved_ns_uris = ['', xml_ns_uri, xmlns_ns_uri]
+
+fn (d &Doc) need_split() {
+	if d.name_local.len == 0 {
+		panic('flatxml: local names need resolve_namespaces() to have run')
+	}
+}
 
 // ns_of is the namespace id of element i.
 @[inline]
@@ -218,11 +238,13 @@ pub fn (d &Doc) ns_of(i u32) u32 {
 // local_id is the name id of element i's local name.
 @[inline]
 pub fn (d &Doc) local_id(i u32) u32 {
+	d.need_split()
 	return d.name_local[d.tag[i]]
 }
 
 // local_name is element i's name without its prefix.
 pub fn (d &Doc) local_name(i u32) string {
+	d.need_split()
 	return d.names[d.name_local[d.tag[i]]]
 }
 
@@ -235,11 +257,13 @@ pub fn (d &Doc) attr_ns_of(a u32) u32 {
 // attr_local_id is the name id of attribute a's local name.
 @[inline]
 pub fn (d &Doc) attr_local_id(a u32) u32 {
+	d.need_split()
 	return d.name_local[d.attr_tag[a]]
 }
 
 // attr_local_name is attribute a's name without its prefix.
 pub fn (d &Doc) attr_local_name(a u32) string {
+	d.need_split()
 	return d.names[d.name_local[d.attr_tag[a]]]
 }
 
@@ -251,7 +275,7 @@ pub fn (d &Doc) is_ns_decl(a u32) bool {
 
 // ns_uri is the URI of namespace id; '' for no namespace.
 pub fn (d &Doc) ns_uri(id u32) string {
-	return d.ns_uris[id]
+	return if int(id) < d.ns_uris.len { d.ns_uris[id] } else { reserved_ns_uris[id] }
 }
 
 // ns_id is the id of a namespace URI, if the document declares it (or it is reserved).

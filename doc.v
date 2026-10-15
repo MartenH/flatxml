@@ -136,6 +136,8 @@ pub fn (mut d Doc) free() {
 		d.attr_ns.free()
 		d.name_prefix.free()
 		d.name_local.free()
+		d.ns_uris.free()
+		d.ns_ids.free()
 	}
 }
 
