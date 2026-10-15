@@ -548,3 +548,9 @@ fn test_known_edits_are_reported_exactly() {
 	}
 	assert seen.len == 5 && seen.values().all(it > 20), '${seen}'
 }
+
+fn test_keys_of_several_parts_and_occurrences_are_shown() {
+	mut d := diff_of('<r><s n="x"><ref>a</ref><ref>b</ref><v>1</v></s></r>', '<r><s n="x"><ref>a</ref><ref>b</ref><v>2</v></s></r>',
+		'r s key=@n,ref+ merge\ns v single merge')
+	assert lines_of(d) == ['~ /r/s[x,a|b]/v: "1" -> "2"  a.xml:1:37 -> b.xml:1:37']
+}
