@@ -132,6 +132,9 @@ fn (r &Reader) lookup_type(p Pending, xs u32, complex_ok bool) !TypeRef {
 			return r.at(p, 'xsd:anyType is not supported')
 		}
 		b := builtin_named(local) or { return r.at(p, 'xsd:${local} is not a built-in type') }
+		if b in [.entity, .entities, .notation] {
+			return r.at(p, 'xsd:${local} needs a DTD or notations: not supported')
+		}
 		return TypeRef{.builtin, u32(b)}
 	}
 	if st := r.s.named_simple[p.name.key()] {
@@ -211,56 +214,63 @@ fn (mut r Reader) finish_simple_type(k u32) ! {
 	if r.st_done[k] == 2 {
 		return
 	}
+	if r.st_done[k] == 1 {
+		return error('${r.st_pos(k)}type ${r.st_name(k)} derives from itself')
+	}
+	r.st_done[k] = 1
 	st := r.s.simple_types[k]
 	if st.base.kind == .simple {
 		r.finish_simple_type(st.base.idx)!
 	}
 	root := r.s.root_of(st.base)
 	r.s.simple_types[k].root = root
-	// the position, worked out only for a message: finding a line scans the file
-	where := fn [r, k] () string {
-		return if int(k) < r.st_where.len {
-			r.docs[r.st_where[k].doc].pos(r.st_where[k].node) + ': '
-		} else {
-			''
-		}
-	}
 	name := r.st_name(k)
 	if root in [.entity, .entities, .notation] {
-		return error('${where()}type ${name} derives from xsd:${builtin_name(root)}, which needs a DTD or notations: not supported')
+		return error('${r.st_pos(k)}type ${name} derives from xsd:${builtin_name(root)}, which needs a DTD or notations: not supported')
 	}
 	if st.max_length >= 0 && !length_applies(root) {
-		return error('${where()}maxLength does not apply to type ${name}, a ${builtin_name(root)}')
+		return error('${r.st_pos(k)}maxLength does not apply to type ${name}, a ${builtin_name(root)}')
 	}
 	if st.max_length >= 0 {
 		if base_max := r.s.max_length_of(st.base) {
 			if st.max_length > base_max {
-				return error('${where()}maxLength ${st.max_length} of type ${name} is longer than its base allows (${base_max})')
+				return error('${r.st_pos(k)}maxLength ${st.max_length} of type ${name} is longer than its base allows (${base_max})')
 			}
 		}
 	}
 	if st.white_space != .unset {
 		if !string_like(root) && st.white_space != .collapse {
-			return error('${where()}whiteSpace of type ${name}, a ${builtin_name(root)}, can only be collapse')
+			return error('${r.st_pos(k)}whiteSpace of type ${name}, a ${builtin_name(root)}, can only be collapse')
 		}
 		base_ws := r.s.white_space(st.base)
 		if int(st.white_space) < int(base_ws) {
-			return error('${where()}whiteSpace ${st.white_space} of type ${name} is looser than its base (${base_ws})')
+			return error('${r.st_pos(k)}whiteSpace ${st.white_space} of type ${name} is looser than its base (${base_ws})')
 		}
 	}
 	if st.enums.len > 0 {
 		ws := r.s.white_space(TypeRef{.simple, k})
 		mut m := Matcher{}
 		// each value valid for the base, then kept by value for lookups
-		for e in st.enums {
+		for j, e in st.enums {
 			v := normalized(e, ws)
-			if p := r.s.value_problem(st.base, v, mut m) {
-				return error('${where()}enumeration value "${shortened(v)}" of type ${name} ${p}')
+			qkey := if j < st.enum_qnames.len { st.enum_qnames[j] } else { '' }
+			if p := r.s.value_problem(st.base, v, mut m, qkey) {
+				return error('${r.st_pos(k)}enumeration value "${shortened(v)}" of type ${name} ${p}')
 			}
-			r.s.simple_types[k].enum_keys[value_key(root, v)] = true
+			r.s.simple_types[k].enum_keys[value_key(root, v, qkey)] = true
 		}
 	}
 	r.st_done[k] = 2
+}
+
+// st_pos is where simple type k is declared, for a message ('' for one the reader made itself).
+// Worked out only when needed: finding a line scans the file.
+fn (r &Reader) st_pos(k u32) string {
+	return if int(k) < r.st_where.len {
+		r.docs[r.st_where[k].doc].pos(r.st_where[k].node) + ': '
+	} else {
+		''
+	}
 }
 
 fn (r &Reader) st_name(st u32) string {

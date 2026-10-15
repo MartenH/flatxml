@@ -241,13 +241,19 @@ fn designated(s string, designators string, fraction_last bool) ?int {
 	return n
 }
 
-// date_part checks -?yyyy-mm-dd (the year at least four digits, no leading zero past four, not
-// 0000) and answers the rest.
-fn year_part(s string) ?(i64, string) {
-	mut t := s
-	if t.starts_with('-') {
-		t = t[1..]
-	}
+// YearInfo is a year as written: its sign, its digits, and its value modulo 400 (from its last
+// four digits, since 10000 is a multiple of 400), which is all a leap year needs.
+struct YearInfo {
+	neg    bool
+	digits string
+	mod400 int
+}
+
+// year_part reads -?yyyy (at least four digits, no leading zero past four, not 0000) and answers
+// the rest.
+fn year_part(s string) ?(YearInfo, string) {
+	neg := s.starts_with('-')
+	t := if neg { s[1..] } else { s }
 	mut k := 0
 	for k < t.len && t[k].is_digit() {
 		k++
@@ -255,11 +261,18 @@ fn year_part(s string) ?(i64, string) {
 	if k < 4 || (k > 4 && t[0] == `0`) {
 		return none
 	}
-	year := t[..k].i64()
-	if year == 0 {
+	mut zero := true
+	for j in 0 .. k {
+		if t[j] != `0` {
+			zero = false
+			break
+		}
+	}
+	if zero {
 		return none
 	}
-	return year, t[k..]
+	tail := if k > 4 { t[k - 4..k] } else { t[..k] }
+	return YearInfo{neg, t[..k], tail.int() % 400}, t[k..]
 }
 
 fn two_digits(s string, lo int, hi int) ?int {
@@ -270,12 +283,21 @@ fn two_digits(s string, lo int, hi int) ?int {
 	return if n < lo || n > hi { none } else { n }
 }
 
-fn days_in(year i64, month int) int {
+// days_in is the length of a month. Before 1 CE the leap rule XSD 1.0 meant is disputed, so
+// February 29 is allowed in every such year rather than rejected in some.
+fn days_in(y YearInfo, month int) int {
+	leap := y.neg || (y.mod400 % 4 == 0 && y.mod400 % 100 != 0) || y.mod400 == 0
 	return match month {
-		2 { if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 29 } else { 28 } }
+		2 { if leap { 29 } else { 28 } }
 		4, 6, 9, 11 { 30 }
 		else { 31 }
 	}
+}
+
+// a leap year, for the g types, which name a day of no particular year
+const any_year = YearInfo{
+	digits: '2000'
+	mod400: 0
 }
 
 // is_timezone: empty, Z, or (+|-)hh:mm up to 14:00.
@@ -369,7 +391,7 @@ fn is_g_month_day(v string) bool {
 	}
 	month := two_digits(v[2..], 1, 12) or { return false }
 	day := two_digits(v[5..], 1, 31) or { return false }
-	return day <= days_in(2000, month) && is_timezone(v[7..])
+	return day <= days_in(any_year, month) && is_timezone(v[7..])
 }
 
 fn is_g_day(v string) bool {
@@ -395,29 +417,35 @@ fn is_g_month(v string) bool {
 // base64_octets is the number of octets a base64Binary literal encodes: groups of four
 // characters, spaces allowed between, `=` padding only at the end and only after a character
 // whose unused bits are zero.
+@[direct_array_access]
 fn base64_octets(v string) ?int {
-	s := v.replace(' ', '')
-	if s.len % 4 != 0 {
+	mut n := 0 // characters other than spaces
+	mut pad := 0
+	mut last := u8(0) // the last character before any padding
+	// One pass, in place: count, check each character, and keep what the padding rule needs.
+	for c in v {
+		if c == ` ` {
+			continue
+		}
+		if c == `=` {
+			pad++
+		} else if pad > 0 || !(c.is_alnum() || c == `+` || c == `/`) {
+			return none
+		} else {
+			last = c
+		}
+		n++
+	}
+	if n % 4 != 0 || pad > 2 {
 		return none
 	}
-	pad := if s.ends_with('==') {
-		2
-	} else if s.ends_with('=') {
-		1
-	} else {
-		0
-	}
-	body := s[..s.len - pad]
-	if !body.bytes().all(it.is_alnum() || it == `+` || it == `/`) {
+	if pad == 2 && n > 2 && 'AQgw'.index_u8(last) < 0 {
 		return none
 	}
-	if pad == 2 && body.len > 0 && 'AQgw'.index_u8(body[body.len - 1]) < 0 {
+	if pad == 1 && n > 1 && 'AEIMQUYcgkosw048'.index_u8(last) < 0 {
 		return none
 	}
-	if pad == 1 && body.len > 0 && 'AEIMQUYcgkosw048'.index_u8(body[body.len - 1]) < 0 {
-		return none
-	}
-	return s.len / 4 * 3 - pad
+	return n / 4 * 3 - pad
 }
 
 // --- names ---------------------------------------------------------------------------------

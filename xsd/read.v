@@ -644,6 +644,8 @@ fn (mut r Reader) restriction(c DocCtx, i u32, idx u32) ! {
 			'enumeration' {
 				n := r.s.simple_types[idx].enums.len
 				r.s.simple_types[idx].enums << value
+				// as a QName, should the type turn out to be one: resolved where it is written
+				r.s.simple_types[idx].enum_qnames << expanded_at(c.d, ch, value.trim_space())
 				r.only_annotations(c, ch, .enumeration, idx, n)!
 				continue
 			}
@@ -851,4 +853,16 @@ fn (mut r Reader) pend(c DocCtx, i u32, kind RefKind, slot u32, value string) ! 
 		doc:  c.di
 		node: i
 	}
+}
+
+// expanded_at is a value written at element i of schema document d, read as a QName: {uri}local
+// by the namespaces in scope there (unprefixed: the default namespace), or '' when it is not one.
+fn expanded_at(d &flatxml.Doc, i u32, v string) string {
+	if !is_qname(v) {
+		return ''
+	}
+	colon := v.index_u8(`:`)
+	prefix := if colon < 0 { '' } else { v[..colon] }
+	ns := d.ns_for_prefix(i, prefix) or { return '' }
+	return '{${d.ns_uri(ns)}}${v[colon + 1..]}'.clone()
 }

@@ -56,6 +56,7 @@ pub mut:
 	compiled    []Pattern // the same, compiled
 	root        Builtin   // the built-in type at the end of its derivation chain
 	enum_keys   map[string]bool // its enumeration values by value (value_key), for lookup
+	enum_qnames []string        // each enumeration value as {uri}local, by the schema's namespaces where it is written ('' when not a qualified name there)
 	white_space WhiteSpace
 	max_length  int = -1
 }

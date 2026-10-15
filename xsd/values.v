@@ -71,11 +71,12 @@ fn (mut m Matcher) matches(s &Schema, st u32, k int, v string) bool {
 // value_problem says why the normalised value v is not a valid value of type t, or none when it
 // is: the built-in type's lexical space, then each derivation step's facets (patterns, as
 // alternatives within a step; enumeration, by value; maxLength). m runs the patterns.
-fn (s &Schema) value_problem(t TypeRef, v string, mut m Matcher) ?string {
+fn (s &Schema) value_problem(t TypeRef, v string, mut m Matcher, qkey string) ?string {
 	root := s.root_of(t)
 	if p := lexical_problem(root, v) {
 		return p
 	}
+	mut key := '' // v's value_key, made when an enumeration first needs it
 	mut cur := t
 	// Each derivation step's facets, up to the built-in type.
 	for cur.kind == .simple {
@@ -95,7 +96,10 @@ fn (s &Schema) value_problem(t TypeRef, v string, mut m Matcher) ?string {
 			}
 			return 'does not match ${what}'
 		}
-		if st.enum_keys.len > 0 && value_key(root, v) !in st.enum_keys {
+		if st.enum_keys.len > 0 && key == '' {
+			key = value_key(root, v, qkey)
+		}
+		if st.enum_keys.len > 0 && key !in st.enum_keys {
 			if st.enums.len <= 8 {
 				return 'is not one of ${st.enums.join(', ')}'
 			}
@@ -166,8 +170,10 @@ fn (vr &Validator) checks(t TypeRef) bool {
 // attr set, the value of attribute attr of element i. A problem is a finding at i.
 fn (mut vr Validator) check_value(i u32, attr i64, t TypeRef, raw string) {
 	v := normalized(raw, vr.s.white_space(t))
-	problem := vr.s.value_problem(t, v, mut vr.matcher) or {
-		vr.record_reference(i, vr.s.root_of(t), v)
+	root := vr.s.root_of(t)
+	qkey := if root in [.qname, .notation] { vr.expanded(i, v) } else { '' }
+	problem := vr.s.value_problem(t, v, mut vr.matcher, qkey) or {
+		vr.record_reference(i, root, v)
 		return
 	}
 	if vr.keep() {
@@ -193,71 +199,72 @@ pub fn (s &Schema) root_of(t TypeRef) Builtin {
 }
 
 // value_key is v (in the lexical space of built-in root) as a key equal for equal values: numbers
-// by their decimal value, booleans by truth, floats by their double, timezones Z and +00:00 alike,
-// hex binary in upper case, base64 without spaces; the rest as written.
-fn value_key(root Builtin, v string) string {
-	match root {
-		.decimal, .integer, .non_positive_integer, .negative_integer, .long, .int, .short, .byte,
-		.non_negative_integer, .unsigned_long, .unsigned_int, .unsigned_short, .unsigned_byte,
-		.positive_integer {
-			neg, whole, frac := decimal_digits(v) or { return v }
-			w := if whole == '' { '0' } else { whole }
-			key := if frac == '' { w } else { '${w}.${frac}' }
-			return if neg && key != '0' { '-' + key } else { key }
-		}
+// by their decimal value, booleans by truth, floats by their double, dates and times by the
+// instant they name, durations by their months and seconds, hex binary in upper case, base64
+// without spaces; the rest as written. A QName is keyed by its namespace and local name, which
+// needs the namespaces in scope where it is written: the caller supplies that key (qkey).
+fn value_key(root Builtin, v string, qkey string) string {
+	if is_integer(root) || root == .decimal {
+		neg, whole, frac := decimal_digits(v) or { return v }
+		w := if whole == '' { '0' } else { whole }
+		key := if frac == '' { w } else { '${w}.${frac}' }
+		return if neg && key != '0' { '-' + key } else { key }
+	}
+	if is_temporal(root) {
+		key := temporal_key(root, v)
+		return if key == '' { v } else { key }
+	}
+	return match root {
 		.boolean {
-			return if v in ['true', '1'] { 'true' } else { 'false' }
+			if v in ['true', '1'] { 'true' } else { 'false' }
 		}
 		.float, .double {
 			if v in ['INF', '-INF', 'NaN'] {
-				return v
+				v
+			} else if root == .float {
+				f32(v.f64()).str()
+			} else {
+				v.f64().str()
 			}
-			f := v.f64()
-			return if root == .float { f32(f).str() } else { f.str() }
-		}
-		.date_time, .time, .date, .g_year_month, .g_year, .g_month_day, .g_day, .g_month {
-			for tz in ['+00:00', '-00:00'] {
-				if v.ends_with(tz) {
-					return v[..v.len - tz.len] + 'Z'
-				}
-			}
-			return v
 		}
 		.hex_binary {
-			return v.to_upper()
+			v.to_upper()
 		}
 		.base64_binary {
-			return v.replace(' ', '')
+			v.replace(' ', '')
+		}
+		.qname, .notation {
+			if qkey == '' { v } else { qkey }
 		}
 		else {
-			return v
+			v
 		}
 	}
 }
 
 // value_length is the length of v as the length facets count it: octets for the binary types,
-// items for the list types, characters otherwise.
+// items for the list types, characters otherwise. It counts in place.
 fn value_length(root Builtin, v string) int {
 	return match root {
-		.hex_binary { v.len / 2 }
-		.base64_binary { base64_octets(v) or { 0 } }
-		.nmtokens, .idrefs, .entities { if v == '' { 0 } else { v.count(' ') + 1 } }
-		else { v.runes().len }
+		.hex_binary {
+			v.len / 2
+		}
+		.base64_binary {
+			base64_octets(v) or { 0 }
+		}
+		.nmtokens, .idrefs, .entities {
+			if v == '' { 0 } else { v.count(' ') + 1 }
+		}
+		else {
+			mut n := 0
+			for c in v {
+				if c & 0xC0 != 0x80 {
+					n++
+				}
+			}
+			n
+		}
 	}
-}
-
-// length_applies reports whether the length facets apply to values of root.
-fn length_applies(root Builtin) bool {
-	return root in [.string, .normalized_string, .token, .language, .nmtoken, .nmtokens, .name,
-		.nc_name, .id, .idref, .idrefs, .entity, .entities, .any_uri, .qname, .notation, .hex_binary,
-		.base64_binary, .any_simple_type]
-}
-
-// string_like reports whether root derives from string, the only family whose whiteSpace can be
-// other than collapse.
-fn string_like(root Builtin) bool {
-	return root in [.string, .normalized_string, .token, .language, .nmtoken, .nmtokens, .name,
-		.nc_name, .id, .idref, .idrefs, .entity, .entities, .any_simple_type]
 }
 
 // max_length_of is the nearest maxLength up t's derivation chain, if any.
@@ -271,4 +278,13 @@ fn (s &Schema) max_length_of(t TypeRef) ?int {
 		cur = st.base
 	}
 	return none
+}
+
+// expanded is a QName value written at element i as {uri}local, by the namespaces in scope there
+// (an unprefixed one in the default namespace); '' when its prefix is not declared.
+fn (vr &Validator) expanded(i u32, v string) string {
+	colon := v.index_u8(`:`)
+	prefix := if colon < 0 { '' } else { v[..colon] }
+	ns := vr.d.ns_for_prefix(i, prefix) or { return '' }
+	return '{${vr.d.ns_uri(ns)}}${v[colon + 1..]}'
 }

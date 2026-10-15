@@ -531,3 +531,40 @@ fn test_facets_are_checked_when_the_schema_compiles() {
 	assert fails('<xs:simpleType name="X"><xs:restriction base="xs:unsignedByte"><xs:enumeration value="300"/></xs:restriction></xs:simpleType>').contains('enumeration value "300" of type {urn:test}X is outside the range of unsignedByte')
 	assert fails('<xs:simpleType name="X"><xs:restriction base="xs:ENTITY"/></xs:simpleType>').contains('needs a DTD or notations: not supported')
 }
+
+fn test_review_cases_for_facets() {
+	sch := '<xs:element name="r"><xs:complexType><xs:sequence>
+	  <xs:element name="dt" type="t:When" minOccurs="0" maxOccurs="unbounded"/>
+	  <xs:element name="tm" type="t:At" minOccurs="0" maxOccurs="unbounded"/>
+	  <xs:element name="du" type="t:Span" minOccurs="0" maxOccurs="unbounded"/>
+	  <xs:element name="gm" type="t:Month" minOccurs="0" maxOccurs="unbounded"/>
+	  <xs:element name="qn" type="t:Q" minOccurs="0" maxOccurs="unbounded"/>
+	</xs:sequence></xs:complexType></xs:element>
+	<xs:simpleType name="When"><xs:restriction base="xs:dateTime"><xs:enumeration value="2000-01-01T12:00:00Z"/></xs:restriction></xs:simpleType>
+	<xs:simpleType name="At"><xs:restriction base="xs:time"><xs:enumeration value="12:00:00.5"/></xs:restriction></xs:simpleType>
+	<xs:simpleType name="Span"><xs:restriction base="xs:duration"><xs:enumeration value="P1Y"/><xs:enumeration value="PT24H"/></xs:restriction></xs:simpleType>
+	<xs:simpleType name="Month"><xs:restriction base="xs:gMonth"><xs:enumeration value="--05"/></xs:restriction></xs:simpleType>
+	<xs:simpleType name="Q"><xs:restriction base="xs:QName"><xs:enumeration value="t:x"/></xs:restriction></xs:simpleType>'
+	s := compile(sch)!
+	run := fn [s] (body string) []FindingKind {
+		mut d := flatxml.parse_string('<r xmlns="urn:test" xmlns:o="urn:test" xmlns:z="urn:z">${body}</r>') or { panic(err) }
+		return kinds(validate(mut d, s) or { panic(err) })
+	}
+	// the same instant, time, duration and month, written otherwise
+	assert run('<dt>2000-01-01T13:00:00+01:00</dt><dt>2000-01-01T12:00:00.000Z</dt>') == []
+	assert run('<dt>2000-01-01T12:00:00</dt>') == [.invalid_value] // no timezone: another value
+	assert run('<tm>12:00:00.50</tm>') == []
+	// a time with a timezone is never equal to one without
+	assert run('<tm>13:00:00.5+01:00</tm>') == [.invalid_value]
+	assert run('<du>P12M</du><du>P1D</du><du>PT1440M</du>') == []
+	assert run('<du>P13M</du>') == [.invalid_value]
+	assert run('<gm>--05--</gm>') == []
+	// a QName enumeration compares namespaces, not prefixes
+	assert run('<qn>o:x</qn><qn>x</qn>') == []
+	assert run('<qn>z:x</qn>') == [.invalid_value]
+	// a year too long for a number is a year all the same
+	ok_long := lexical_problem(.g_year, '123456789012345678901') == none
+	assert ok_long
+	// a declaration may not use ENTITY directly either
+	assert fails('<xs:attribute name="img" type="xs:ENTITY"/>').contains('needs a DTD or notations: not supported')
+}
