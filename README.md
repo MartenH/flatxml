@@ -159,7 +159,8 @@ println('<v>${flatxml.escape_text('a < b')}</v>')
 ```
 
 **Editing.** An edit set (`Doc.edit`) keeps changes beside the document, keyed by node, and never
-rewrites its arrays: set an element's text, set or remove an attribute, insert an element (parsed
+rewrites its arrays: set an element's text (or its runs of text, each after so many children),
+set or remove an attribute, insert an element (parsed
 from a string, or copied from any node of any document), remove one, move one. It reads through
 its changes (`ENode`: name, text, attributes, children, parent, as edited), so a chain of edits
 can be made on what earlier ones did, and inside inserted content too. Written, it copies every
@@ -261,11 +262,13 @@ Results marked *earlier* predate this repository; the parser has not changed sin
   DOCTYPE with an internal subset, CRLF, references, whitespace written as references, `<a/>`
   beside `<a></a>`, both quotes, whitespace the tree drops, what follows the root, a byte order
   mark).
-- **Edits**: 30,000 random edit sets (every kind of edit, on random documents with comments,
-  mixed content, CDATA and namespaces), written and read back, give the tree a model of the same
-  edits gives, every name in its namespace, and every element no edit reached byte for byte what
-  it was. The same random edits made by lxml (`tools/edits_vs_lxml.py`) give the same tree on 560
-  real-world configuration files (28,000 edits) and 33,377 other XML files (333,770 edits).
+- **Edits**: 30,000 random edit sets (every kind of edit, on random documents with comments, mixed
+  content, CDATA and namespaces), written and read back, give the tree a model of the same edits
+  gives, every name in its namespace, and every element no edit reached byte for byte what it was.
+  Diffs between random documents and random edits of them, applied through an edit set, give the
+  new document (18,000 pairs). The same random edits made by lxml (`tools/edits_vs_lxml.py`) give
+  the same tree on 560 real-world configuration files (28,000 edits) and 33,377 other XML files
+  (333,770 edits).
 - **Mutation fuzzing** against expat (`tools/fuzz_vs_expat.py`): random edits, plus namespace
   edits that keep a document well-formed (renaming a prefix, dropping a declaration); 24,000 cases
   over six seeds, with and without namespaces. No crash, no valid document refused, no tree
@@ -426,10 +429,11 @@ Non-validating, and lenient where that does not change how a well-formed file re
   whitespace-only run between two comments.
 - A document must be smaller than 4 GiB, because offsets are `u32`.
 - Edits: values are written as UTF-8, so a document in another encoding is not edited correctly.
-  Setting the text of an element with mixed content replaces its first run of text and removes
-  the others. A moved or copied element is given every binding that differs at its new
-  place, used in its names or not, since a value such as `xsi:type="p:T"` may use one; they are
-  not among the attributes the edit set reads (`ENode.attrs`).
+  Text set on an element replaces all of its own text (`set_text` puts it before the first child
+  element, `set_text_runs` run by run); two runs in one slot are written as one. A moved or copied
+  element is given every binding that differs at its new place, used in its names or not, since a
+  value such as `xsi:type="p:T"` may use one; they are not among the attributes the edit set reads
+  (`ENode.attrs`).
 
 ## Build and test
 

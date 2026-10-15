@@ -1,5 +1,10 @@
 module flatxml
 
+// own_of is element i's own text, its runs joined.
+fn (d &Doc) own_of(i u32) string {
+	return d.node(i).text_runs().map(it.text).join('')
+}
+
 fn doc_of(s string) &Doc {
 	return parse_string(s) or { panic('${err}\n${s}') }
 }
@@ -26,7 +31,7 @@ fn shape(n Node) string {
 			s += ' ${n.doc.attr_name(a)}=${n.doc.attr_value(a)}'
 		}
 	}
-	s += '>' + n.doc.own_text_of(n.i)
+	s += '>' + n.doc.own_of(n.i)
 	for c in n.children() {
 		s += shape(c)
 	}
@@ -302,7 +307,7 @@ mut:
 fn tm_of(d &Doc, i u32, key_piece u32, orig bool) &TM {
 	mut t := &TM{
 		name: d.name(i)
-		text: d.own_text_of(i)
+		text: d.own_of(i)
 		key:  ekey(key_piece, i)
 		orig: if orig { i } else { 0 }
 		uri:  d.ns_uri(d.ns_of(i))
@@ -530,8 +535,8 @@ fn same(mut w Doc, wi u32, t &TM, src &Doc) ! {
 	if attrs != want {
 		return error('<${t.name}> attributes ${attrs}, expected ${want}')
 	}
-	if w.own_text_of(wi) != t.text {
-		return error('<${t.name}> text `${w.own_text_of(wi)}`, expected `${t.text}`')
+	if w.own_of(wi) != t.text {
+		return error('<${t.name}> text `${w.own_of(wi)}`, expected `${t.text}`')
 	}
 	// its namespace is the one it was read in
 	uri := w.ns_uri(w.ns_of(wi))
@@ -594,4 +599,134 @@ fn test_random_edit_sets() {
 		cases++
 	}
 	assert cases == 400 && ops > 1000
+}
+
+fn test_set_text_runs() {
+	assert edited('<p>one <b>x</b> two<!-- c --> three<i/></p>', fn (mut e Edit) ! {
+		e.set_text_runs(e.root(), [TextRun{0, 'a'}, TextRun{1, 'b'}, TextRun{2, 'c'}])!
+	}) == '<p>a<b>x</b><!-- c -->b<i/>c</p>'
+	// slots count the children as edited
+	assert edited('<p>\n  <b/>\n  <i/>\n</p>', fn (mut e Edit) ! {
+		r := e.root()
+		e.remove(r.child('b'))!
+		e.insert(r, 1, '<n/>')!
+		e.set_text_runs(r, [TextRun{1, 'mid'}, TextRun{5, 'end'}])!
+	}) == '<p>\n  <i/>mid<n/>end</p>'
+	d := doc_of('<p>a<b/>c</p>')
+	mut e := d.edit()
+	e.set_text_runs(e.root(), [TextRun{1, 'x'}, TextRun{0, 'y'}]) or {
+		assert err.msg().contains('decrease')
+	}
+	// read through: the original runs, after the children now before them
+	e.insert(e.root(), 0, '<n/>')!
+	assert e.root().text_runs() == [TextRun{0, 'a'}, TextRun{2, 'c'}]
+}
+
+// apply_diff makes the changes of diff, from the document e edits to another, as the diff says to:
+// removals and moves lifted out, then added and moved nodes put in at their places, lowest first,
+// then texts and attributes. A diff places text by slot (after so many children), so an element
+// whose children change keeps its runs at their slots unless its text changed too.
+fn apply_diff(mut e Edit, diff Diff) ! {
+	at := fn [e] (n MNode) ENode {
+		return e.node(n.fragment(0).i)
+	}
+	mut slots := map[u64][]TextRun{}
+	for c in diff.changes {
+		if c.kind in [.removed, .moved] {
+			p := at(c.old.parent())
+			slots[p.key] = p.text_runs()
+		}
+		if c.kind in [.added, .moved] {
+			p := at(c.parent)
+			slots[p.key] = p.text_runs()
+		}
+	}
+	for c in diff.changes {
+		if c.kind == .text {
+			slots.delete(at(c.old).key)
+		}
+	}
+	for c in diff.changes {
+		if c.kind in [.removed, .moved] {
+			e.remove(at(c.old))!
+		}
+	}
+	mut ins := diff.changes.filter(it.kind in [.added, .moved])
+	ins.sort(a.index < b.index)
+	for c in ins {
+		if c.kind == .added {
+			e.insert_copy(at(c.parent), c.index, c.new.fragment(0))!
+		} else {
+			e.place(at(c.old), at(c.parent), c.index)!
+		}
+	}
+	for k, runs in slots {
+		e.set_text_runs(ENode{e, k}, runs)!
+	}
+	for c in diff.changes {
+		if c.kind == .text {
+			e.set_text_runs(at(c.old), c.runs)!
+		} else if c.kind == .attr {
+			if v := c.after {
+				e.set_attr(at(c.old), c.name, v)!
+			} else {
+				e.remove_attr(at(c.old), c.name)!
+			}
+		}
+	}
+}
+
+// ns_shape writes a tree as one line, as a diff compares it: names with their namespaces,
+// attributes in any order, and the own text at each slot among the children (the runs of one slot
+// joined: a comment between two is not kept).
+fn ns_shape(d &Doc, i u32) string {
+	mut slots := map[int]string{}
+	for r in d.node(i).text_runs() {
+		slots[r.slot] += r.text
+	}
+	mut attrs := []string{}
+	lo, hi := d.attr_range(i)
+	for a := lo; a < hi; a++ {
+		if !is_ns_decl_name(d.attr_name(a)) {
+			attrs << '${d.attr_name(a)}=${d.attr_value(a)}'
+		}
+	}
+	attrs.sort()
+	mut s := '{${d.ns_uri(d.ns_of(i))}}${d.name(i)}${attrs}${slots}'
+	for c in d.node(i).children() {
+		s += ns_shape(d, c.i)
+	}
+	return s + '/'
+}
+
+fn test_a_diff_applied_by_an_edit_set_gives_the_new_document() {
+	mut r := Rng{0x2545F4914F6CDD1D}
+	mut applied := 0
+	for _ in 0 .. 300 {
+		// a document, and another made from it by random edits
+		s := random_doc(mut r)
+		mut a := doc_of(s)
+		a.resolve_namespaces()!
+		mut other := doc_of(random_doc(mut r))
+		other.resolve_namespaces()!
+		mut e0 := a.edit()
+		mut model := tm_of(a, a.root(), 0, true)
+		for _ in 0 .. 1 + r.n(6) {
+			apply_random(mut r, mut e0, mut model, other)!
+		}
+		mut b := doc_of(e0.xml())
+		b.resolve_namespaces()!
+		diff := diff_docs(a, b, RuleSet{}, DiffOptions{})!
+		if diff.changes.any(it.kind == .added && !it.parent.ok()) {
+			continue // the root replaced
+		}
+		mut e := a.edit()
+		apply_diff(mut e, diff)!
+		out := e.xml()
+		mut w := doc_of(out)
+		w.resolve_namespaces()!
+		assert ns_shape(w, w.root()) == ns_shape(b, b.root()), out
+		applied++
+	}
+	assert applied > 250
 }

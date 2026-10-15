@@ -46,7 +46,7 @@ struct Piece {
 // NodeEdit is what changed at one node.
 struct NodeEdit {
 mut:
-	text     ?string
+	runs     ?[]TextRun // its own text, run by run, when set
 	attrs    []AttrChange
 	ins      []Insert // elements put under this one, each before an original child or at the end
 	lost     int      // original children removed or moved away
@@ -145,16 +145,40 @@ pub fn (n ENode) name() string {
 
 // text is the element's own text, decoded: beside child elements, the text beside them, joined.
 pub fn (n ENode) text() string {
+	return n.text_runs().map(it.text).join('')
+}
+
+// text_runs is the element's own text run by run, each with its slot: the number of child
+// elements, as edited, before it.
+pub fn (n ENode) text_runs() []TextRun {
 	if !n.ok() {
-		return ''
+		return []
 	}
-	if ne := n.e.nodes[n.key] {
-		if t := ne.text {
-			return t
+	ne := n.e.nodes[n.key] or { NodeEdit{} }
+	if runs := ne.runs {
+		return runs
+	}
+	d := n.e.doc_of(n.key)
+	i := kindex(n.key)
+	if d.text_len[i] != 0 {
+		return [TextRun{0, d.text(i)}]
+	}
+	// the original runs, each after the child elements that are now before it
+	pc := kpiece(n.key)
+	mut out := []TextRun{}
+	mut slot := 0
+	mut c := d.first_child(i)
+	for c != no_node {
+		ck := ekey(pc, c)
+		slot += ne.ins.filter(it.anchor == ck).len
+		if d.is_text(c) {
+			out << TextRun{slot, d.text(c)}
+		} else if !n.e.detached(ck) {
+			slot++
 		}
+		c = d.next_sibling(c)
 	}
-	src := n.source()
-	return src.doc.own_text_of(src.i)
+	return out
 }
 
 // attr is the value of the attribute name; '' when there is none.
@@ -248,23 +272,6 @@ pub fn (n ENode) parent() ENode {
 // removed reports whether the element is not in the edited document.
 pub fn (n ENode) removed() bool {
 	return !n.ok() || !n.e.in_tree(n.key)
-}
-
-// own_text_of is element i's own text, decoded: its text, or beside child elements, the text
-// beside them, joined.
-fn (d &Doc) own_text_of(i u32) string {
-	if d.text_len[i] != 0 {
-		return d.text(i)
-	}
-	mut parts := []string{}
-	mut c := d.first_child(i)
-	for c != no_node {
-		if d.is_text(c) {
-			parts << d.text(c)
-		}
-		c = d.next_sibling(c)
-	}
-	return parts.join('')
 }
 
 // --- structure ------------------------------------------------------------------------------
@@ -368,12 +375,24 @@ fn (e &Edit) check(n ENode, what string) ! {
 	}
 }
 
-// set_text replaces the element's own text. Beside child elements, the first run of text is
-// replaced and the others removed; with none, the text goes first.
+// set_text makes text the element's own text, before its first child element; the text it had
+// beside its children goes.
 pub fn (mut e Edit) set_text(n ENode, text string) ! {
-	e.check(n, 'set_text')!
+	e.set_text_runs(n, if text == '' { []TextRun{} } else { [TextRun{0, text}] })!
+}
+
+// set_text_runs makes runs the element's own text: each run after as many of its child elements
+// (as they are when it is written) as its slot says, in place of the text it had beside them.
+// Slots must not decrease; a run whose slot is past the last child goes after it.
+pub fn (mut e Edit) set_text_runs(n ENode, runs []TextRun) ! {
+	e.check(n, 'set_text_runs')!
+	for k := 1; k < runs.len; k++ {
+		if runs[k].slot < runs[k - 1].slot {
+			return error('set_text_runs: the slots of the runs decrease')
+		}
+	}
 	mut ne := e.nodes[n.key] or { NodeEdit{} }
-	ne.text = text
+	ne.runs = runs.filter(it.text != '')
 	e.nodes[n.key] = ne
 }
 
@@ -566,7 +585,7 @@ fn (e &Edit) plan() EditPlan {
 	mut touched := map[u64]bool{}
 	mut dirty := map[u64]bool{}
 	for k, ne in e.nodes {
-		if ne.text != none || ne.attrs.len > 0 || ne.ins.len > 0 || ne.lost > 0 {
+		if ne.runs != none || ne.attrs.len > 0 || ne.ins.len > 0 || ne.lost > 0 {
 			touched[k] = true
 			mut a := k
 			for a != no_key && a !in dirty {
@@ -744,33 +763,23 @@ fn (d &Doc) attr_lead(a u32) u32 {
 }
 
 // edited_content writes the content of element k, lo .. hi of its document: see write_element.
-// A new text replaces the first run of text and the others are left out; with none, it goes
-// first.
+// Text that was set is written run by run, each after as many child elements as its slot says,
+// in place of the text the element had; whitespace the parser left out is never written next to
+// text, where it would join it.
 fn (mut em Emitter) edited_content(p EditPlan, k u64, ne NodeEdit, lo u32, hi u32) ! {
 	e := p.e
 	d := e.doc_of(k)
 	i := kindex(k)
 	pc := kpiece(k)
-	text_set := ne.text != none
-	new_text := ne.text or { '' }
-	mut has_text := d.text_len[i] != 0
-	mut c := d.first_child(i)
-	for c != no_node && !has_text {
-		has_text = d.is_text(c)
-		c = d.next_sibling(c)
+	mut w := ContentWriter{
+		runs:  ne.runs or { []TextRun{} }
+		set:   ne.runs != none
+		cdata: d.first_text_is_cdata(i)
 	}
 	mut pos := lo
-	// Whitespace the parser left out stays out: none is written right after text, where it
-	// would join it.
-	mut text_last := false
-	if text_set && !has_text && new_text != '' {
-		em.text(new_text, false)!
-		text_last = true
-	}
-	mut text_done := false // the first run of text replaced
 	mut indent_last := ''
 	// Each original child, after the bytes before it and what was put before it.
-	c = d.first_child(i)
+	mut c := d.first_child(i)
 	for c != no_node {
 		ck := ekey(pc, c)
 		start := d.span_start(c)
@@ -779,89 +788,122 @@ fn (mut em Emitter) edited_content(p EditPlan, k u64, ne NodeEdit, lo u32, hi u3
 		if d.is_element(c) {
 			indent_last = indent
 		}
-		if text_last {
+		if w.text_last {
 			pos = ws_prefix_end(d, pos, ind)
 		}
 		if pos < ind {
 			em.copy_in(d, pos, ind)!
-			text_last = false
+			w.text_last = false
 		}
 		for x in ne.ins {
 			if x.anchor == ck {
-				if !text_last {
+				em.runs_before(mut w)!
+				if !w.text_last {
 					em.put(indent)!
 				}
 				em.placed(p, x.node)!
-				text_last = false
+				w.element_done()
 			}
 		}
 		if d.is_text(c) {
-			if !text_set {
+			if !w.set {
 				em.copy_in(d, ind, d.span_end(c))!
-				text_last = true
-			} else if !text_done {
-				if new_text != '' {
-					em.text(new_text, d.is_cdata(c))!
-					text_last = true
-				}
-				text_done = true
+				w.text_last = true
 			}
 		} else if !e.detached(ck) {
-			if !text_last {
+			em.runs_before(mut w)!
+			if !w.text_last {
 				em.copy_in(d, ind, start)!
 			}
 			em.edited_child(p, ck)!
-			text_last = false
+			w.element_done()
 		}
 		pos = d.span_end(c)
 		c = d.next_sibling(c)
 	}
 	// The rest: text that is the element's only content, comments, and the whitespace before the
 	// end tag; what was put at the end goes before that whitespace.
-	if text_last {
+	if w.text_last {
 		pos = ws_prefix_end(d, pos, hi)
 	}
 	mut ws := ws_suffix_start(d, pos, hi)
-	mut after_text := text_last && ws == pos
 	if d.text_len[i] != 0 {
 		tlo := d.text_off[i] - if d.is_cdata(i) { u32(9) } else { 0 }
 		thi := d.text_end(i)
-		if ws <= thi {
+		if ws < thi {
 			ws = thi
-			after_text = !text_set || new_text != ''
 		}
-		if text_set {
+		if w.set {
 			em.copy_in(d, pos, tlo)!
-			if new_text != '' {
-				em.text(new_text, d.is_cdata(i))!
+			em.runs_before(mut w)!
+			if thi < ws {
+				em.copy_in(d, thi, ws)!
+				w.text_last = false
 			}
-			em.copy_in(d, thi, ws)!
 		} else {
 			em.copy_in(d, pos, ws)!
+			w.text_last = ws == thi
 		}
-	} else {
+	} else if pos < ws {
 		em.copy_in(d, pos, ws)!
+		w.text_last = false
 	}
 	for x in ne.ins {
 		if x.anchor == no_key {
-			if !after_text {
+			em.runs_before(mut w)!
+			if !w.text_last {
 				em.put(indent_last)!
 			}
 			em.placed(p, x.node)!
+			w.element_done()
 		}
 	}
-	em.copy_in(d, ws, hi)!
+	w.count = max_int
+	em.runs_before(mut w)!
+	if !w.text_last {
+		em.copy_in(d, ws, hi)!
+	}
 }
 
-// last_child_node is the last child node of i, text or element.
-fn (d &Doc) last_child_node(i u32) u32 {
+// ContentWriter is where edited_content is in the element's content: the runs of a text that was
+// set and how many are written, how many child elements are, and whether text was written last.
+struct ContentWriter {
+	runs  []TextRun
+	set   bool
+	cdata bool // the element's text was CDATA, and the new text is too
+mut:
+	next      int // the next run to write
+	count     int // child elements written
+	text_last bool
+}
+
+fn (mut w ContentWriter) element_done() {
+	w.count++
+	w.text_last = false
+}
+
+// runs_before writes the runs that come before the next child element.
+fn (mut em Emitter) runs_before(mut w ContentWriter) ! {
+	for w.next < w.runs.len && w.runs[w.next].slot <= w.count {
+		em.text(w.runs[w.next].text, w.cdata)!
+		w.next++
+		w.text_last = true
+	}
+}
+
+// first_text_is_cdata reports whether the first run of element i's own text is a CDATA section.
+fn (d &Doc) first_text_is_cdata(i u32) bool {
+	if d.text_len[i] != 0 {
+		return d.is_cdata(i)
+	}
 	mut c := d.first_child(i)
-	mut last := c
 	for c != no_node {
-		last = c
+		if d.is_text(c) {
+			return d.is_cdata(c)
+		}
 		c = d.next_sibling(c)
 	}
-	return last
+	return false
 }
 
 // ws_prefix_end is where the whitespace that starts lo .. hi of d's source ends.
