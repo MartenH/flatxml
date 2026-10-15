@@ -996,7 +996,7 @@ fn test_a_set_of_one_document_writes_the_document() {
 			continue
 		}
 		m := s.merge(RuleSet{}) or { panic(err) }
-		assert m.xml() == src, f
+		assert m.xml()! == src, f
 	}
 }
 
@@ -1006,19 +1006,19 @@ fn test_a_merged_view_written_as_one_document() {
 		'b.xml': '<r w="2">\n  <item id="2">two</item>\n  <group n="g" k="3">\n    <!-- y -->\n    <y/>\n  </group>\n</r>\n'
 	})
 	m := s.merge(parse_rules('r item key=@id merge\nr group key=@n merge')!)!
-	assert m.xml() == '<?xml version="1.0"?>\n<!-- head -->\n<r v="1" w="2">\n  <!-- items -->\n  <item id="1">one</item>\n  <item id="2">two</item>\n  <group n="g" k="3">\n    <x/>\n    <!-- y -->\n    <y/>\n  </group>\n</r>\n<!-- tail -->\n'
+	assert m.xml()! == '<?xml version="1.0"?>\n<!-- head -->\n<r v="1" w="2">\n  <!-- items -->\n  <item id="1">one</item>\n  <item id="2">two</item>\n  <group n="g" k="3">\n    <x/>\n    <!-- y -->\n    <y/>\n  </group>\n</r>\n<!-- tail -->\n'
 	// a self-closed element that gets children
 	t := set_of({
 		'a.xml': '<r><g n="1"/></r>'
 		'b.xml': '<r><g n="1"><c/></g></r>'
 	})
-	assert t.merge(parse_rules('r g key=@n merge')!)!.xml() == '<r><g n="1"><c/></g></r>'
+	assert t.merge(parse_rules('r g key=@n merge')!)!.xml()! == '<r><g n="1"><c/></g></r>'
 	// text kept, whitespace beside it not joined to it
 	u := set_of({
 		'a.xml': '<r><p k="1">text</p></r>'
 		'b.xml': '<r>\n  <p k="1">\n    <c/>\n  </p>\n</r>'
 	})
-	assert u.merge(parse_rules('r p key=@k merge')!)!.xml() == '<r><p k="1">text<c/></p></r>'
+	assert u.merge(parse_rules('r p key=@k merge')!)!.xml()! == '<r><p k="1">text<c/></p></r>'
 }
 
 fn test_a_merged_view_keeps_its_namespaces() {
@@ -1027,7 +1027,7 @@ fn test_a_merged_view_keeps_its_namespaces() {
 		'b.xml': '<r xmlns="urn:b" xmlns:p="urn:q"><p:i id="2"><c/></p:i></r>'
 	})
 	m := s.merge(parse_rules('r p:i key=@id merge')!)!
-	out := m.xml()
+	out := m.xml()!
 	assert out == '<r xmlns="urn:a" xmlns:p="urn:p"><p:i id="1"/><p:i xmlns="urn:b" xmlns:p="urn:q" id="2"><c/></p:i></r>'
 	mut d := parse_string(out)!
 	d.resolve_namespaces()!
@@ -1042,20 +1042,20 @@ fn test_a_merged_view_written_with_root_attributes() {
 		'a.xml': '<!-- c -->\n<r xmlns="urn:a" v=\'1\' w="2">\n  <i/>\n</r>\n'
 	}).merge(RuleSet{})!
 	assert one.xml(
-		root_attrs: [AttrValue{'v', '3'}, AttrValue{'xmlns:x', 'urn:x'}, AttrValue{'x:k', 'a&b'}]
-	) == '<!-- c -->\n<r xmlns="urn:a" v=\'3\' w="2" xmlns:x="urn:x" x:k="a&amp;b">\n  <i/>\n</r>\n'
-	assert one.xml() == '<!-- c -->\n<r xmlns="urn:a" v=\'1\' w="2">\n  <i/>\n</r>\n'
+		root_attrs: [EAttr{'v', '3'}, EAttr{'xmlns:x', 'urn:x'}, EAttr{'x:k', 'a&b'}]
+	)! == '<!-- c -->\n<r xmlns="urn:a" v=\'3\' w="2" xmlns:x="urn:x" x:k="a&amp;b">\n  <i/>\n</r>\n'
+	assert one.xml()! == '<!-- c -->\n<r xmlns="urn:a" v=\'1\' w="2">\n  <i/>\n</r>\n'
 	// a self-closed root
 	assert set_of({
 		'a.xml': '<r/>'
-	}).merge(RuleSet{})!.xml(root_attrs: [AttrValue{'v', '1'}]) == '<r v="1"/>'
+	}).merge(RuleSet{})!.xml(root_attrs: [EAttr{'v', '1'}])! == '<r v="1"/>'
 	// several: given over the attributes the others bring, a declaration taken as in scope
 	s := set_of({
 		'a.xml': '<r v="1"><i id="1"/></r>'
 		'b.xml': '<r xmlns:p="urn:p" w="2" p:t="3"><i id="2" p:t="4"/></r>'
 	})
 	m := s.merge(parse_rules('r i key=@id merge')!)!
-	assert m.xml(root_attrs: [AttrValue{'w', '5'}, AttrValue{'xmlns:p', 'urn:p'}]) == '<r v="1" w="5" p:t="3" xmlns:p="urn:p"><i id="1"/><i id="2" p:t="4"/></r>'
+	assert m.xml(root_attrs: [EAttr{'w', '5'}, EAttr{'xmlns:p', 'urn:p'}])! == '<r v="1" p:t="3" w="5" xmlns:p="urn:p"><i id="1"/><i id="2" p:t="4"/></r>'
 	// a declaration that would change what the document's prefixes mean is refused
 	t := set_of({
 		'a.xml': '<r xmlns:p="urn:p"><p:i/></r>'
@@ -1064,12 +1064,81 @@ fn test_a_merged_view_written_with_root_attributes() {
 	defer {
 		os.rm(path) or {}
 	}
-	t.write_file(path, root_attrs: [AttrValue{'xmlns:p', 'urn:q'}]) or {
+	t.write_file(path, root_attrs: [EAttr{'xmlns:p', 'urn:q'}]) or {
 		assert err.msg().contains('rebinds')
 		assert !os.exists(path)
 		return
 	}
 	assert false
+}
+
+// root_refused is why writing the view of files with the root attributes given is refused; ''
+// when it is not.
+fn root_refused(files map[string]string, attrs []EAttr) string {
+	m := set_of(files).merge(RuleSet{}) or { panic(err) }
+	m.xml(root_attrs: attrs) or { return err.msg() }
+	return ''
+}
+
+fn test_root_attributes_that_would_change_the_document_are_refused() {
+	one := {
+		'a.xml': '<r xmlns:p="urn:p" p:t="1"><i/></r>'
+	}
+	// not attribute names, or one given twice
+	for name in ['', 'a b', ':a', 'a:', 'a:b:c', 'a"'] {
+		assert root_refused(one, [EAttr{name, '1'}]).contains('not an attribute name'), name
+	}
+	assert root_refused(one, [EAttr{'v', '1'}, EAttr{'v', '2'}]).contains('given twice')
+	assert root_refused(one, [EAttr{'xmlns:q', 'urn:p'}, EAttr{'p:u', '1'}, EAttr{'q:u', '2'}]).contains('given twice')
+	// a default namespace where none is declared moves every unprefixed name
+	assert root_refused(one, [EAttr{'xmlns', 'urn:x'}]).contains('rebinds')
+	assert root_refused(one, [EAttr{'xmlns', ''}]) == ''
+	assert root_refused(one, [EAttr{'xmlns:p', 'urn:other'}]).contains('rebinds')
+	assert root_refused(one, [EAttr{'xmlns:p', 'urn:p'}]) == ''
+	assert root_refused(one, [EAttr{'xmlns:q', ''}]).contains('no namespace')
+	// the reserved prefixes
+	for a in [EAttr{'xmlns:xml', 'urn:x'}, EAttr{'xmlns:xmlns', xmlns_ns_uri},
+		EAttr{'xmlns:q', xml_ns_uri}, EAttr{'xmlns:q', xmlns_ns_uri}] {
+		assert root_refused(one, [a]).contains('reserved'), a.name
+	}
+	assert root_refused(one, [EAttr{'xmlns:xml', xml_ns_uri}, EAttr{'xml:lang', 'en'}]) == ''
+	// a prefix that is not bound, unless declared with it
+	assert root_refused(one, [EAttr{'u:t', '1'}]).contains('`u` is not bound')
+	assert root_refused(one, [EAttr{'u:t', '1'}, EAttr{'xmlns:u', 'urn:u'}]) == ''
+	// an empty view
+	empty := DocSet.new().merge(RuleSet{})!
+	empty.xml() or {
+		assert err.msg().contains('empty')
+		return
+	}
+	assert false
+}
+
+fn test_a_root_attribute_replaces_the_one_of_its_expanded_name() {
+	// the root's own, under another prefix
+	one := set_of({
+		'a.xml': '<r xmlns:p="urn:p" xmlns:q="urn:p" p:t="1"/>'
+	}).merge(RuleSet{})!
+	assert one.xml(root_attrs: [EAttr{'q:t', '2'}])! == '<r xmlns:p="urn:p" xmlns:q="urn:p" p:t="2"/>'
+	// another contribution's
+	two := set_of({
+		'a.xml': '<r xmlns:p="urn:p"/>'
+		'b.xml': '<r xmlns:q="urn:p" q:t="3" w="4"/>'
+	}).merge(RuleSet{})!
+	assert two.xml(root_attrs: [EAttr{'p:t', '5'}])! == '<r xmlns:p="urn:p" w="4" p:t="5"/>'
+}
+
+fn test_a_root_with_attributes_is_written_alike_whoever_contributed() {
+	attrs := [EAttr{'xmlns:n', 'urn:n'}, EAttr{'n:v', '1'}]
+	alone := set_of({
+		'a.xml': '<r xmlns:p="urn:p">\n  <p:i k="1"><c/></p:i>\n</r>'
+	}).merge(parse_rules('r p:i key=@k merge')!)!
+	merged := set_of({
+		'a.xml': '<r xmlns:p="urn:p">\n  <p:i k="1"><c/></p:i>\n</r>'
+		'b.xml': '<r xmlns:p="urn:p" w="2"/>'
+	}).merge(parse_rules('r p:i key=@k merge')!)!
+	assert alone.xml(root_attrs: attrs)! == '<r xmlns:p="urn:p" xmlns:n="urn:n" n:v="1">\n  <p:i k="1"><c/></p:i>\n</r>'
+	assert merged.xml(root_attrs: attrs)! == '<r xmlns:p="urn:p" w="2" xmlns:n="urn:n" n:v="1">\n  <p:i k="1"><c/></p:i>\n</r>'
 }
 
 fn test_a_split_document_merged_and_written_is_the_document() {
@@ -1085,7 +1154,7 @@ fn test_a_split_document_merged_and_written_is_the_document() {
 			parts['part${f}.xml'] = '<model>' + groups.map(it.write(f)).join('') + '</model>'
 		}
 		m := set_of(parts).merge(rules) or { panic(err) }
-		out := m.xml()
+		out := m.xml()!
 		// read back, the document
 		written := parse_string(out) or { panic('${err}\n${out}') }
 		assert written.subtree_bytes(written.root()) == orig.subtree_bytes(orig.root()), 'round ${round}'
@@ -1104,7 +1173,7 @@ fn test_a_merged_view_written_review_cases() {
 		'a.xml': '<r xmlns:p="urn:a"><g k="1" p:x="1"/></r>'
 		'b.xml': '<r xmlns:p="urn:b"><g k="1" xmlns:p="urn:c" p:y="2"/></r>'
 	})
-	out := a.merge(parse_rules('r g key=@k merge')!)!.xml()
+	out := a.merge(parse_rules('r g key=@k merge')!)!.xml()!
 	mut d := parse_string(out)!
 	d.resolve_namespaces()!
 	g := d.node(d.root()).first()
@@ -1124,22 +1193,22 @@ fn test_a_merged_view_written_review_cases() {
 	b := set_of({
 		'a.xml': '<r><p>x<a k="2"/>y<a k="1"/>z</p></r>'
 	})
-	assert b.merge(parse_rules('p a key=@k')!)!.xml() == '<r><p>x<a k="1"/>z<a k="2"/>y</p></r>'
+	assert b.merge(parse_rules('p a key=@k')!)!.xml()! == '<r><p>x<a k="1"/>z<a k="2"/>y</p></r>'
 	// and so do the comments between an element and its text
 	c := set_of({
 		'a.xml': '<r><p><a/><!--c1-->text<b/></p></r>'
 	})
-	assert c.merge(parse_rules('r p single')!)!.xml() == '<r><p><a/><!--c1-->text<b/></p></r>'
+	assert c.merge(parse_rules('r p single')!)!.xml()! == '<r><p><a/><!--c1-->text<b/></p></r>'
 	// the `xml` prefix is bound everywhere: never declared again
 	x := set_of({
 		'a.xml': '<r><g k="1"/></r>'
 		'b.xml': '<r xmlns:xml="http://www.w3.org/XML/1998/namespace"><g k="2" xml:lang="en"/></r>'
 	})
-	assert x.merge(parse_rules('r g key=@k merge')!)!.xml() == '<r><g k="1"/><g k="2" xml:lang="en"/></r>'
+	assert x.merge(parse_rules('r g key=@k merge')!)!.xml()! == '<r><g k="1"/><g k="2" xml:lang="en"/></r>'
 	// a self-closed first contribution takes its end tag's indentation from another
 	e := set_of({
 		'a.xml': '<r>\n  <g k="1"/>\n</r>'
 		'b.xml': '<r>\n  <g k="1">\n    <c/>\n  </g>\n</r>'
 	})
-	assert e.merge(parse_rules('r g key=@k merge')!)!.xml() == '<r>\n  <g k="1">\n    <c/>\n  </g>\n</r>'
+	assert e.merge(parse_rules('r g key=@k merge')!)!.xml()! == '<r>\n  <g k="1">\n    <c/>\n  </g>\n</r>'
 }

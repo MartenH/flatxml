@@ -14,19 +14,14 @@ import io
 // where it is written is given the declarations that restore them, as an edit's is; namespace
 // declarations are never taken from other contributions as attributes.
 
-// AttrValue is an attribute, by its name as written, and its value.
-pub struct AttrValue {
-pub:
-	name  string
-	value string
-}
-
 @[params]
 pub struct MergedWriteOptions {
 pub:
-	// attributes the root is written with, in place of the ones it has of those names, or after
-	// its others (a namespace declaration among them binds its prefix for the whole document)
-	root_attrs []AttrValue
+	// attributes the root is written with, in place of the ones it has of those expanded names,
+	// or after its others. A namespace declaration among them binds its prefix for the whole
+	// document, and may not change what a prefix in scope means (an absent default namespace is
+	// bound to none); a prefixed name's prefix must be bound.
+	root_attrs []EAttr
 }
 
 // write writes the merged view as one XML document to w.
@@ -47,39 +42,29 @@ pub fn (m &Merged) write_file(path string, opts MergedWriteOptions) ! {
 	})!
 }
 
-// xml is the merged view as one XML document; '' when it is empty.
-pub fn (m &Merged) xml(opts MergedWriteOptions) string {
+// xml is the merged view as one XML document.
+pub fn (m &Merged) xml(opts MergedWriteOptions) !string {
 	root := m.root()
 	if !root.ok() {
-		return ''
+		return error('the merged view is empty')
 	}
 	mut em := emitter_in(root.fragment(0).doc, ModePlan{}, 4096)
-	m.emit(mut em, opts) or { return '' }
-	em.settle() or { return '' }
+	m.emit(mut em, opts)!
+	em.settle()!
 	return em.buf.str()
 }
 
 fn (m &Merged) emit(mut em Emitter, opts MergedWriteOptions) ! {
 	root := m.root()
 	f := root.fragment(0)
-	inside := if f.doc.declares(f.i) { f.doc.own_bindings(f.i) } else { map[string]string{} }
-	for a in opts.root_attrs {
-		if is_ns_decl_name(a.name) {
-			p := decl_prefix(a.name)
-			if u := inside[p] {
-				if u != a.value {
-					return error('the root attribute ${a.name} rebinds a prefix the document binds to ${u}')
-				}
-			}
-		}
-	}
+	over := root_override(f.doc, f.i, opts.root_attrs)!
 	lo, hi := f.doc.span(f.i)
 	em.copy_in(f.doc, 0, lo)!
 	mut w := MergedWriter{
-		m:            m
-		pure:         m.pure_nodes()
-		root:         root.i
-		root_changes: opts.root_attrs.map(AttrChange{it.name, it.value})
+		m:    m
+		pure: m.pure_nodes()
+		root: root.i
+		over: over
 	}
 	w.element(mut em, root.i, hi, map[string]string{})!
 	em.copy_in(f.doc, hi, u32(f.doc.src_len))!
@@ -118,10 +103,10 @@ fn (m &Merged) pure_nodes() []bool {
 
 @[heap]
 struct MergedWriter {
-	m            &Merged
-	pure         []bool
-	root         u32
-	root_changes []AttrChange // the attributes the root is written with
+	m    &Merged
+	pure []bool
+	root u32
+	over RootOverride // what the root is written with
 mut:
 	// the bindings in scope inside an element of a document, by (document, element)
 	inside map[u64]map[string]string
@@ -225,17 +210,7 @@ fn (mut w MergedWriter) element(mut em Emitter, n u32, end u32, scope map[string
 	i := f0.i
 	own := if d.declares(i) { d.own_bindings(i) } else { map[string]string{} }
 	mut decls := scope_decls(w.bindings_above(f0.doc, i), scope, own)
-	if w.pure[n] && n == w.root && w.root_changes.len > 0 {
-		// its start tag with the attributes given, the rest as it is
-		ste := d.start_tag_end(i)
-		closed := d.self_closing(ste)
-		em.start_tag(d, i, w.root_changes, decls, ste, closed)!
-		if !closed {
-			em.copy_in(d, ste, end)!
-		}
-		return
-	}
-	if w.pure[n] {
+	if w.pure[n] && !(n == w.root && w.over.changes.len > 0) {
 		after_name := d.src_off[i] + 1 + u32(d.name(i).len)
 		em.copy_in(d, d.src_off[i], after_name)!
 		if decls.len > 0 {
@@ -246,17 +221,17 @@ fn (mut w MergedWriter) element(mut em Emitter, n u32, end u32, scope map[string
 	}
 	// in scope inside it: where it was read, and what its attributes from others declare
 	mut inner := w.bindings_in(f0.doc, i)
-	if n == w.root && w.root_changes.any(is_ns_decl_name(it.name)) {
+	if n == w.root && w.over.decls.len > 0 {
 		inner = inner.clone() // the cached bindings stay as read
-		for c in w.root_changes {
-			if is_ns_decl_name(c.name) {
-				inner[decl_prefix(c.name)] = c.value or { '' }
-			}
+		for p, u in w.over.decls {
+			inner[p] = u
 		}
 	}
 	mut extras := w.extra_attrs(n, d, i, mut inner, mut decls)
-	if n == w.root {
-		extras << w.root_changes
+	if n == w.root && w.over.changes.len > 0 {
+		// the attributes given in place of those of their expanded names
+		extras = extras.filter(expanded_attr(it.name, inner) !in w.over.names)
+		extras << w.over.changes
 	}
 	ste := d.start_tag_end(i)
 	closed := d.self_closing(ste)
@@ -339,6 +314,97 @@ fn (mut w MergedWriter) extra_attrs(n u32, d &Doc, i u32, mut inner map[string]s
 		}
 	}
 	return out
+}
+
+// RootOverride is the attributes a root is written with: as changes to its start tag, the
+// namespace declarations among them, and their expanded names (`uri local`).
+struct RootOverride {
+mut:
+	changes []AttrChange
+	decls   map[string]string
+	names   map[string]bool
+}
+
+// root_override checks attrs against root element i of d and makes them its override. A name
+// that is not an attribute name or is given twice, a reserved prefix declared or bound, a
+// declaration that changes what a prefix in scope means (the default is bound to none where none
+// is declared), and a prefix not bound are refused. One whose expanded name the root has under
+// another name replaces that attribute.
+fn root_override(d &Doc, i u32, attrs []EAttr) !RootOverride {
+	mut scope := if d.declares(i) { d.own_bindings(i) } else { map[string]string{} }
+	if '' !in scope {
+		scope[''] = ''
+	}
+	mut o := RootOverride{}
+	mut seen := map[string]bool{}
+	for a in attrs {
+		parts := a.name.split(':')
+		if a.name == '' || a.name.contains_any(' \t\r\n<>&=/"\'') || parts.len > 2
+			|| parts.any(it == '') {
+			return error('root attribute `${a.name}` is not an attribute name')
+		}
+		if a.name in seen {
+			return error('root attribute ${a.name} is given twice')
+		}
+		seen[a.name] = true
+		if !is_ns_decl_name(a.name) {
+			continue
+		}
+		p := decl_prefix(a.name)
+		if p == 'xmlns' || a.value == xmlns_ns_uri || (p == 'xml') != (a.value == xml_ns_uri) {
+			return error('root attribute ${a.name}: the prefixes xml and xmlns are reserved')
+		}
+		if p != '' && a.value == '' {
+			return error('root attribute ${a.name} binds a prefix to no namespace')
+		}
+		if u := scope[p] {
+			if u != a.value {
+				return error('root attribute ${a.name} rebinds a prefix the document binds to `${u}`')
+			}
+		}
+		o.decls[p] = a.value
+		scope[p] = a.value
+	}
+	// the root's own attributes by expanded name
+	mut have := map[string]string{}
+	lo, hi := d.attr_range(i)
+	for a := lo; a < hi; a++ {
+		name := d.attr_name(a)
+		if !is_ns_decl_name(name) {
+			have[expanded_attr(name, scope)] = name
+		}
+	}
+	for a in attrs {
+		if is_ns_decl_name(a.name) {
+			o.changes << AttrChange{a.name, a.value}
+			continue
+		}
+		p := prefix_of(a.name)
+		if p != '' && p != 'xml' && (scope[p] or { '' }) == '' {
+			return error('root attribute ${a.name}: the prefix `${p}` is not bound')
+		}
+		key := expanded_attr(a.name, scope)
+		if key in o.names {
+			return error('root attribute ${a.name} is given twice, under another prefix')
+		}
+		o.names[key] = true
+		o.changes << AttrChange{have[key] or { a.name }, a.value}
+	}
+	return o
+}
+
+// expanded_attr is an attribute name's expanded name, `uri local`, by the bindings in scope: an
+// unprefixed attribute is in no namespace.
+fn expanded_attr(name string, scope map[string]string) string {
+	p := prefix_of(name)
+	uri := if p == '' {
+		''
+	} else if p == 'xml' {
+		xml_ns_uri
+	} else {
+		scope[p] or { '' }
+	}
+	return '${uri} ${name.all_after(':')}'
 }
 
 // prefix_of is the prefix of a qualified name; '' for none.
