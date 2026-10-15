@@ -172,13 +172,22 @@ pub:
 // their old slots, where they moved, unless it has a text change of its own.
 pub fn (d &Diff) apply(opts ApplyOptions) !&MEdit {
 	mut me := d.old.edit()
+	d.apply_to(mut me, opts)!
+	return me
+}
+
+// apply_to makes the changes of the diff on edits already begun on its old view, read through
+// them: what the diff's old nodes are now, and where they are, is what the edits made of them.
+pub fn (d &Diff) apply_to(mut me MEdit, opts ApplyOptions) ! {
+	if voidptr(me.view) != voidptr(d.old) {
+		return error('apply: the edits are not of the view the diff was made from')
+	}
 	mut a := Applier{
 		d:    d
 		me:   me
 		into: opts.into
 	}
 	a.run()!
-	return me
 }
 
 // apply makes the changes of a diff between two documents on the first, as edits: the diff

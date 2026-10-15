@@ -31,6 +31,12 @@
 //                                  reads what was written and diffs it against NEW. Exits 0 when
 //                                  it applied (and checked), 1 when the check finds a change, 2
 //                                  on trouble
+//   flatxml merge3 [--rules <file>] [--ns] [--jobs N] [--ext EXT] <BASE> <OURS> <THEIRS> <OUT>
+//   flatxml merge3 ... --in-place <BASE> <OURS> <THEIRS>   the changes from BASE to OURS and
+//                                  to THEIRS made together on the files of BASE, written as
+//                                  `apply` writes; where both change a node differently, ours is
+//                                  kept and the conflict listed with its place in all three.
+//                                  Exits 0 when there is none, 1 when there are, 2 on trouble
 //   flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups]
 //                 <file|dir>...    read many files as one set and merge them by the rules
 //                                  (`flatxml.parse_rules`): the merged view's size, its time,
@@ -69,6 +75,9 @@ const usage = 'usage:
   flatxml apply [--rules <file>] [--ns] [--jobs N] [--ext EXT] [--check] <OLD> <NEW> <OUT>
   flatxml apply [...] --in-place <OLD> <NEW>
                                 the diff from OLD to NEW applied to the files of OLD, written to OUT
+  flatxml merge3 [--rules <file>] [--ns] [--jobs N] [--ext EXT] <BASE> <OURS> <THEIRS> <OUT>
+  flatxml merge3 [...] --in-place <BASE> <OURS> <THEIRS>
+                                both changes made on BASE, conflicts listed (ours kept)
   flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups] [-o OUT] <file|dir>...
                                 many files merged by rules: the view, its time, the problems
   flatxml diff [--rules <file>] [--ns] [--jobs N] [--ext EXT] [--brief] <A> <B>
@@ -153,6 +162,9 @@ fn main() {
 		}
 		'apply' {
 			apply_sets(args[1..])
+		}
+		'merge3' {
+			merge3_sets(args[1..])
 		}
 		'stats' {
 			parse_only := args[1] == '--parse-only'
@@ -529,10 +541,11 @@ mut:
 
 // set_flags are the flags each command that reads a set takes.
 const set_flags = {
-	'set':   ['--ns', '--jobs', '--ext']
-	'merge': ['--ns', '--jobs', '--ext', '--rules', '--problems', '--lookups', '--out']
-	'diff':  ['--ns', '--jobs', '--ext', '--rules', '--brief']
-	'apply': ['--ns', '--jobs', '--ext', '--rules', '--check', '--in-place']
+	'set':    ['--ns', '--jobs', '--ext']
+	'merge':  ['--ns', '--jobs', '--ext', '--rules', '--problems', '--lookups', '--out']
+	'diff':   ['--ns', '--jobs', '--ext', '--rules', '--brief']
+	'apply':  ['--ns', '--jobs', '--ext', '--rules', '--check', '--in-place']
+	'merge3': ['--ns', '--jobs', '--ext', '--rules', '--in-place']
 }
 
 // read_set_args reads the arguments of `set`, `merge` or `diff` (cmd), and exits with the usage on
@@ -1166,68 +1179,17 @@ fn apply_sets(args []string) {
 	read := sw.elapsed()
 	d := flatxml.diff(old, new)
 	compared := sw.elapsed() - read
-	// a new element goes to the file of OLD named like the file of NEW it comes from
-	old_root, new_root := operand_root(a.paths[0]), operand_root(a.paths[1])
-	// each document of OLD by its path relative to OLD, each of NEW to the one of OLD named alike
-	mut old_names := []string{}
-	mut by_name := map[string]int{}
-	for k, doc in old.set.docs {
-		name := relative_to(doc.path, old_root) or { '' }
-		old_names << name
-		if name != '' {
-			by_name[name] = k
-		}
-	}
-	mut to_old := map[u64]int{}
-	for doc in new.set.docs {
-		if name := relative_to(doc.path, new_root) {
-			if k := by_name[name] {
-				to_old[u64(voidptr(doc))] = k
-			}
-		}
-	}
-	into := fn [to_old] (f flatxml.Node, p flatxml.MNode) int {
-		return to_old[u64(voidptr(f.doc))] or { -1 }
-	}
+	into := into_by_name(old, a.paths[0], [new], [a.paths[1]])
 	mut me := d.apply(into: into) or {
 		eprintln('flatxml ${err}')
 		exit(2)
 	}
 	applied := sw.elapsed() - read - compared
-	mut out := ''
-	if a.in_place {
-		me.write_files() or {
-			eprintln('flatxml apply: ${err}')
-			exit(2)
-		}
-	} else {
-		out = a.paths[2]
-		single := old.set.docs.len == 1 && !os.is_dir(a.paths[0]) && !a.paths[0].starts_with('@')
-		// a set's documents go to OUT at their places relative to OLD: one outside it has none
-		if !single {
-			for k, name in old_names {
-				if name == '' {
-					eprintln('flatxml apply: ${old.set.docs[k].path} is not below ${old_root}, so it has no place in ${out}')
-					exit(2)
-				}
-			}
-		}
-		mut paths := map[u64]string{}
-		for k, doc in old.set.docs {
-			paths[u64(voidptr(doc))] = if single { out } else { os.join_path(out, old_names[k]) }
-		}
-		me.write_to(fn [paths] (doc &flatxml.Doc) string {
-			return paths[u64(voidptr(doc))] or { '' }
-		}) or {
-			eprintln('flatxml apply: ${err}')
-			exit(2)
-		}
-	}
+	written := write_result(mut me, old, a, 'apply')
 	println('${d.changes.len} changes applied to ${me.edited().len} of ${old.set.docs.len} files (read and merged in ${ms(read)}, compared in ${ms(compared)}, applied in ${ms(applied)})')
 	if !a.check {
 		return
 	}
-	written := if a.in_place { a.paths[0] } else { out }
 	back := a.read_view(written, rules, 'apply')
 	again := flatxml.diff(back, new)
 	if again.equal() {
@@ -1236,4 +1198,101 @@ fn apply_sets(args []string) {
 	}
 	println('checked: ${written} and ${a.paths[1]} still differ in ${again.changes.len} changes')
 	exit(1)
+}
+
+// doc_names is each document of view by its path relative to the root of operand p; '' for one
+// not below it.
+fn doc_names(view &flatxml.Merged, p string) []string {
+	root := operand_root(p)
+	return view.set.docs.map(relative_to(it.path, root) or { '' })
+}
+
+// into_by_name is an `into` that sends a new element to the document of base named like the
+// document of one of the other views it comes from (each read from operand ps[k]).
+fn into_by_name(base &flatxml.Merged, base_p string, others []&flatxml.Merged, ps []string) flatxml.IntoFn {
+	mut by_name := map[string]int{}
+	for k, name in doc_names(base, base_p) {
+		if name != '' {
+			by_name[name] = k
+		}
+	}
+	mut to_base := map[u64]int{}
+	for j, v in others {
+		for k, name in doc_names(v, ps[j]) {
+			if b := by_name[name] {
+				to_base[u64(voidptr(v.set.docs[k]))] = b
+			}
+		}
+	}
+	return fn [to_base] (f flatxml.Node, p flatxml.MNode) int {
+		return to_base[u64(voidptr(f.doc))] or { -1 }
+	}
+}
+
+// write_result writes the edited documents of base (read from a.paths[0]): over its own files
+// with --in-place, else to a.paths.last(), a file for a file, a directory for a set with each
+// document at its place relative to the operand. It is where they were written.
+fn write_result(mut me flatxml.MEdit, base &flatxml.Merged, a &SetArgs, cmd string) string {
+	if a.in_place {
+		me.write_files() or {
+			eprintln('flatxml ${cmd}: ${err}')
+			exit(2)
+		}
+		return a.paths[0]
+	}
+	out := a.paths.last()
+	names := doc_names(base, a.paths[0])
+	single := base.set.docs.len == 1 && !os.is_dir(a.paths[0]) && !a.paths[0].starts_with('@')
+	// a set's documents go to OUT at their places relative to the operand: one outside it has none
+	if !single {
+		for k, name in names {
+			if name == '' {
+				eprintln('flatxml ${cmd}: ${base.set.docs[k].path} is not below ${operand_root(a.paths[0])}, so it has no place in ${out}')
+				exit(2)
+			}
+		}
+	}
+	mut paths := map[u64]string{}
+	for k, doc in base.set.docs {
+		paths[u64(voidptr(doc))] = if single { out } else { os.join_path(out, names[k]) }
+	}
+	me.write_to(fn [paths] (doc &flatxml.Doc) string {
+		return paths[u64(voidptr(doc))] or { '' }
+	}) or {
+		eprintln('flatxml ${cmd}: ${err}')
+		exit(2)
+	}
+	return out
+}
+
+// merge3_sets reads BASE, OURS and THEIRS, merges the changes from BASE to each on BASE's files
+// (`flatxml.merge3`), writes them to OUT (or over BASE's files with --in-place), and lists the
+// conflicts, where ours is kept.
+fn merge3_sets(args []string) {
+	a := read_set_args(args, 'merge3')
+	if a.paths.len != if a.in_place { 3 } else { 4 } {
+		eprintln(usage)
+		exit(2)
+	}
+	rules := a.read_rules()
+	sw := time.new_stopwatch()
+	base := a.read_view(a.paths[0], rules, 'merge3')
+	ours := a.read_view(a.paths[1], rules, 'merge3')
+	theirs := a.read_view(a.paths[2], rules, 'merge3')
+	read := sw.elapsed()
+	into := into_by_name(base, a.paths[0], [ours, theirs], [a.paths[1], a.paths[2]])
+	mut m := flatxml.merge3(base, ours, theirs, into: into) or {
+		eprintln('flatxml merge3: ${err}')
+		exit(2)
+	}
+	merged := sw.elapsed() - read
+	write_result(mut m.edit, base, a, 'merge3')
+	mut out := os.stdout()
+	for c in m.conflicts {
+		write_or_exit(mut out, m.describe(c) + '\n')
+	}
+	println('${m.ours.changes.len} changes of ours and ${m.taken} of theirs on ${m.edit.edited().len} of ${base.set.docs.len} files, ${m.conflicts.len} conflicts, ours kept (read and merged in ${ms(read)}, compared and applied in ${ms(merged)})')
+	if m.conflicts.len > 0 {
+		exit(1)
+	}
 }

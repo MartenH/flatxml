@@ -60,6 +60,9 @@ jobs:
       - name: A diff applied gives the new document
         run: bin/flatxml apply --check testdata/tricky.xml "$RUNNER_TEMP/edited.xml" "$RUNNER_TEMP/applied.xml"
 
+      - name: A three-way merge takes both sides
+        run: bin/flatxml merge3 testdata/tricky.xml "$RUNNER_TEMP/edited.xml" testdata/tricky.xml "$RUNNER_TEMP/merged.xml"
+
       - name: A generated document is valid against its schema
         run: bin/flatxml validate testdata/inventory.xsd "$RUNNER_TEMP/gen_8.xml"
 

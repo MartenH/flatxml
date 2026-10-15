@@ -148,8 +148,8 @@ annotations are kept for that), but none is needed.
    goes to the document `into` names, else to that of its nearest new sibling of its own
    aggregation, after the nearest sibling before it there; a value changes in the fragments that
    hold the old one, and a value the node did not have goes to one fragment, as an element would.
-   A three-way merge is two diffs from a common base, applied together where they change different
-   nodes and reported where they change the same.
+   A three-way merge (`merge3`) is two diffs from a common base, applied together where they
+   change different nodes and reported where they change the same differently.
 7. **Writing.** A document, an edited document (each changed file of a set, back to its own
    path) or a merged view (as one document) is written as XML: unchanged
    subtrees as their original bytes, changed ones serialised with the escaping their place needs
@@ -297,7 +297,31 @@ Round trips, which need no oracle:
    are comments); the 560 files against a copy with 267 texts changed apply to the 54 files
    changed, or, with the rules, 61: identical definitions kept in two directories are one merged
    node, so a value changed in one copy changes in both.
-6. **Three-way merge**: two changed versions of one base.
+6. **Three-way merge** (done), and `flatxml merge3 BASE OURS THEIRS OUT`: two changed versions of
+   one base, documents or sets read by the same rules. Both are compared with the base, so both
+   diffs name the base's nodes, and their changes are put together node by node: a change one side
+   makes is taken; the same change made on both (one text, one attribute value, one removal, a
+   move under one parent, an equal subtree added under one node) is taken once; two that disagree
+   are a conflict. A conflict is a text or an attribute changed to two values, a node removed on
+   one side and changed (at or below it) on the other, or a node moved under two different
+   parents; a node removed by both, or by one inside a node the other removes, is not one. The
+   result keeps ours for every conflict and is written all the same: a conflict is listed with the
+   node's path and its place in the base, ours and theirs (`-` where a side removed it), and the
+   command exits 1, so a caller for whom a conflict is an error refuses the result; no markers are
+   written into the files, which would make them documents of no schema. The changes are applied
+   to the base, ours first (`Diff.apply`), then theirs read through ours (`Diff.apply_to`), so
+   every byte neither touched stays as the base has it, and a new element goes to the base's file
+   named like the file it comes from. A patch is the same thing: the changes from A to B made on C
+   is the merge of C (ours) and B (theirs) on A. Verified: 300 random models, each group of each
+   edited by ours, by theirs, by both alike, by both differently or by neither (texts, attributes,
+   children removed, added and reordered, groups removed, new groups on each side), merge to the
+   model with every edit, and report exactly the groups edited both ways, ours kept; each rule of
+   putting changes together breaks a test when removed. On the 560 real-world files, two copies
+   with 267 and 276 texts changed independently merge in 0.6 s (after 0.9 s reading the three)
+   into 102 files with 2 conflicts (one text changed to two values twice), the result differing
+   from ours by exactly theirs's changes and from theirs by ours's; with the rules, where changing
+   a key text splits a node, 3 conflicts on 125 files, the result again differing from each side
+   by exactly the other's changes.
 
 ## Techniques taken from other tools
 
