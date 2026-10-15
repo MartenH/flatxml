@@ -14,6 +14,11 @@
 //   flatxml roundtrip [--nodes|--rewrite] [--ext EXT] <file|dir>...   write each document and
 //                                  compare: the same bytes as the file, or with --rewrite the
 //                                  same tree; prints the files that differ and a count
+//   flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups]
+//                 <file|dir>...    read many files as one set and merge them by the rules
+//                                  (`flatxml.parse_rules`): the merged view's size, its time,
+//                                  and what the rules forbid (the first N, default 10);
+//                                  --lookups times finding every node again
 //   flatxml schema <xsd>...        compile an XML Schema and print what it holds
 //   flatxml schema --batch [--times]   compile one schema per stdin line (tab-separated
 //                                  documents), answering `ok` or `error<TAB>message` per line;
@@ -41,6 +46,8 @@ const usage = 'usage:
   flatxml set [--ns] [--jobs N] [--ext EXT] <file|dir>...   many files as one set, timed
   flatxml write [--nodes|--rewrite] <in> <out|->   write a document back as XML
   flatxml roundtrip [--nodes|--rewrite] [--ext EXT] <file|dir>...   write and compare each
+  flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups] <file|dir>...
+                                many files merged by rules: the view, its time, the problems
   flatxml schema <xsd>...       compile an XML Schema (and what it imports), print what it holds
   flatxml schema --batch        one schema per stdin line (documents tab-separated): ok | error<TAB>why
   flatxml validate <xsd> <doc>...  check documents against a schema
@@ -102,6 +109,9 @@ fn main() {
 			if !round_trip(args[1..]) {
 				exit(1)
 			}
+		}
+		'merge' {
+			merge_set(args[1..])
 		}
 		'stats' {
 			parse_only := args[1] == '--parse-only'
@@ -460,46 +470,88 @@ fn rate(b i64, d time.Duration) string {
 	return '(${f64(b) / (1024 * 1024) / s:.1f} MB/s)'
 }
 
-// load_set reads files and directories as one document set and prints what it holds.
-fn load_set(args []string) {
-	mut ns := false
-	mut jobs := 0
-	mut ext := '.xml'
-	mut paths := []string{}
+// SetArgs is what the commands that read a set take: files and directories, and how to read them.
+struct SetArgs {
+mut:
+	ns       bool
+	jobs     int
+	ext      string = '.xml'
+	paths    []string
+	rules    string // merge: the rules file
+	problems int = 10 // merge: how many problems to print
+	lookups  bool // merge: time looking every node up
+}
+
+// read_set_args reads the arguments of `set`, or of `merge` when merging, and exits with the usage
+// on a flag the command does not take or a value it cannot use.
+fn read_set_args(args []string, merging bool) SetArgs {
+	mut a := SetArgs{}
 	mut k := 0
 	for k < args.len {
+		if !merging && args[k] in ['--rules', '--problems', '--lookups'] {
+			eprintln('flatxml set: ${args[k]} is for merge\n${usage}')
+			exit(2)
+		}
 		match args[k] {
 			'--ns' {
-				ns = true
+				a.ns = true
 			}
 			'--jobs' {
 				k++
-				jobs = if k < args.len { args[k].int() } else { 0 }
+				a.jobs = if k < args.len { args[k].int() } else { 0 }
 			}
 			'--ext' {
 				k++
-				ext = if k < args.len { args[k] } else { ext }
+				a.ext = if k < args.len { args[k] } else { a.ext }
+			}
+			'--rules' {
+				k++
+				a.rules = if k < args.len { args[k] } else { '' }
+			}
+			'--problems' {
+				k++
+				n := if k < args.len { args[k] } else { '' }
+				a.problems = n.int()
+				if '${a.problems}' != n || a.problems < 0 {
+					eprintln('flatxml merge: --problems takes a count, not `${n}`\n${usage}')
+					exit(2)
+				}
+			}
+			'--lookups' {
+				a.lookups = true
 			}
 			else {
-				paths << args[k]
+				a.paths << args[k]
 			}
 		}
 		k++
 	}
-	sw := time.new_stopwatch()
+	return a
+}
+
+// files lists the files named and those below the directories named, ending in ext.
+fn (a &SetArgs) files() []string {
 	mut files := []string{}
-	for p in paths {
+	for p in a.paths {
 		if os.is_dir(p) {
-			mut found := os.walk_ext(p, ext)
+			mut found := os.walk_ext(p, a.ext)
 			found.sort()
 			files << found
 		} else {
 			files << p
 		}
 	}
+	return files
+}
+
+// load_set reads files and directories as one document set and prints what it holds.
+fn load_set(args []string) {
+	a := read_set_args(args, false)
+	sw := time.new_stopwatch()
+	files := a.files()
 	listed := sw.elapsed()
 	mut s := flatxml.DocSet.new()
-	errs := s.load(files, jobs: jobs, namespaces: ns)
+	errs := s.load(files, jobs: a.jobs, namespaces: a.ns)
 	took := sw.elapsed() - listed
 	mut bytes := i64(0)
 	mut nodes := 0
@@ -640,4 +692,92 @@ fn tree_difference(d &flatxml.Doc, xml string) ?string {
 		}
 	}
 	return 'a different tree after dump line ${la.len}'
+}
+
+// merge_set reads files and directories as one set, merges them by a rules file
+// (`flatxml.parse_rules`), and prints what the view holds and what the rules forbid. It exits 1
+// when a file fails to read or the rules find a problem.
+fn merge_set(args []string) {
+	a := read_set_args(args, true)
+	if a.rules == '' || a.paths.len == 0 {
+		eprintln(usage)
+		exit(2)
+	}
+	rules := flatxml.parse_rules(os.read_file(a.rules) or {
+		eprintln(err)
+		exit(1)
+	}) or {
+		eprintln('${a.rules}: ${err}')
+		exit(1)
+	}
+	sw := time.new_stopwatch()
+	mut s := flatxml.DocSet.new()
+	errs := s.load(a.files(), jobs: a.jobs, namespaces: a.ns)
+	read := sw.elapsed()
+	mut m := s.merge(rules) or {
+		eprintln(err)
+		exit(1)
+	}
+	merged := sw.elapsed() - read
+	mut nodes := 0
+	for d in s.docs {
+		nodes += d.len() - 1 - d.text_node_count()
+	}
+	println('${s.docs.len} files, ${nodes} elements, read in ${ms(read)}')
+	println('merged in ${ms(merged)}: ${m.len()} nodes from ${m.fragment_total()} contributions, ${m.problems.len} problems')
+	mut by_kind := map[string]int{}
+	for p in m.problems {
+		by_kind['${p.kind}']++
+	}
+	for kind, n in by_kind {
+		println('  ${kind}: ${n}')
+	}
+	for p in m.problems#[..a.problems] {
+		println('  ${one_line(m.describe(p))}')
+	}
+	if a.lookups {
+		time_lookups(m)
+	}
+	for e in errs {
+		println('  failed: ${one_line(e.msg)}')
+	}
+	if errs.len > 0 || m.problems.len > 0 {
+		exit(1)
+	}
+}
+
+// time_lookups finds every keyed node again by its key path, and every node identified by its
+// name (and key) from its parent, and prints how long each took.
+fn time_lookups(m &flatxml.Merged) {
+	mut paths := [][]string{}
+	mut named := []flatxml.MNode{}
+	for i in 0 .. m.len() {
+		n := m.node(u32(i))
+		if n.keyed() {
+			kp := n.key_path()
+			if kp.len > 0 {
+				paths << kp
+			}
+		}
+		if n.parent().ok() && n.parent().child_id(n.tag(), n.key()).i == n.i {
+			named << n
+		}
+	}
+	mut sw := time.new_stopwatch()
+	mut found := 0
+	for p in paths {
+		if m.by_keys(p).ok() {
+			found++
+		}
+	}
+	by_path := sw.elapsed()
+	sw.restart()
+	mut found_named := 0
+	for n in named {
+		if n.parent().child_id(n.tag(), n.key()).ok() {
+			found_named++
+		}
+	}
+	by_name := sw.elapsed()
+	println('lookups: ${found} of ${paths.len} key paths in ${ms(by_path)}, ${found_named} children by name and key in ${ms(by_name)}')
 }
