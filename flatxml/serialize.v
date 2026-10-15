@@ -256,3 +256,34 @@ pub fn (d &Doc) inner_xml(i u32) string {
 	e.settle() or {}
 	return e.buf.str()
 }
+
+// scope_decls are the namespace declarations an element read where the bindings src are in scope
+// needs where dst are, so its names keep their namespaces: for each prefix bound differently,
+// its binding in src (` xmlns:p="uri"`, or ` xmlns=""` for a default namespace src does not
+// have), but for the prefixes in own, which the element declares itself.
+fn scope_decls(src map[string]string, dst map[string]string, own map[string]string) []string {
+	mut prefixes := src.keys()
+	for p in dst.keys() {
+		if p !in src {
+			prefixes << p
+		}
+	}
+	prefixes.sort()
+	mut out := []string{}
+	for p in prefixes {
+		if p in own {
+			continue
+		}
+		have := src[p] or { '' }
+		there := dst[p] or { '' }
+		if have == there {
+			continue
+		}
+		if p == '' {
+			out << ' xmlns="${escape_attr(have, `"`)}"'
+		} else if have != '' {
+			out << ' xmlns:${p}="${escape_attr(have, `"`)}"'
+		}
+	}
+	return out
+}

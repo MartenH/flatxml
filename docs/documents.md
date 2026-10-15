@@ -214,6 +214,19 @@ Round trips, which need no oracle:
    does not use them: on a loaded machine, six runs each took 246–296 ms against 248–287 ms
    before, and 265–309 ms with a path rule beside every rule of the set (1,873 rules), so that
    every parent's ancestors are read.
+
+   A merged view is written as one document (`Merged.write`, `write_file`, `flatxml merge -o`): a
+   node made of one contribution whose children are its own, unchanged all the way down, is copied
+   byte for byte; any other is written from its first contribution (its start tag, with the
+   attributes only the others have after its own; its text; its merged children in the view's
+   order, each after the indentation and comments that stood before it where it was read). An
+   element read where other namespace bindings were in scope is given the declarations that restore
+   them, the rule the edit writer uses. A set of one document writes its file byte for byte
+   (`testdata/`); 200 random documents split into one to six files by their keys, merged and
+   written, are the document again, and the written file merged alone is the same view. The 560
+   real-world files with their rules (936) write as one 160 MB document in about 0.35 s (0.6–3.6 s
+   to a file, synced to disk), and `flatxml diff` of the inputs against it, both merged by the
+   rules, finds no change.
 4. **Diff** (design 4, done), and `flatxml diff [--rules FILE] A B`: two files, directories or
    lists, the changes with their paths and positions, exit 0 when there are none and 1 when
    there are. Diffs of 400 random documents, each changed by one to four random edits, applied

@@ -1,5 +1,7 @@
 module flatxml
 
+import os
+
 // set_of reads documents from text into one set, each named as given, in the order given.
 fn set_of(files map[string]string) &DocSet {
 	mut s := DocSet.new()
@@ -982,4 +984,80 @@ fn test_rule_sets_are_written_and_read_back() {
 			key:      ['']
 		}]
 	})! == '* *\n* * key=.\n'
+}
+
+// --- a merged view written as one document --------------------------------------------------
+
+fn test_a_set_of_one_document_writes_the_document() {
+	for f in os.walk_ext(os.join_path(@VMODROOT, 'testdata'), '.xml') {
+		src := os.read_file(f) or { panic(err) }
+		mut s := DocSet.new()
+		if s.load([f]).len > 0 {
+			continue
+		}
+		m := s.merge(RuleSet{}) or { panic(err) }
+		assert m.xml() == src, f
+	}
+}
+
+fn test_a_merged_view_written_as_one_document() {
+	s := set_of({
+		'a.xml': '<?xml version="1.0"?>\n<!-- head -->\n<r v="1">\n  <!-- items -->\n  <item id="1">one</item>\n  <group n="g">\n    <x/>\n  </group>\n</r>\n<!-- tail -->\n'
+		'b.xml': '<r w="2">\n  <item id="2">two</item>\n  <group n="g" k="3">\n    <!-- y -->\n    <y/>\n  </group>\n</r>\n'
+	})
+	m := s.merge(parse_rules('r item key=@id merge\nr group key=@n merge')!)!
+	assert m.xml() == '<?xml version="1.0"?>\n<!-- head -->\n<r v="1" w="2">\n  <!-- items -->\n  <item id="1">one</item>\n  <item id="2">two</item>\n  <group n="g" k="3">\n    <x/>\n    <!-- y -->\n    <y/>\n  </group>\n</r>\n<!-- tail -->\n'
+	// a self-closed element that gets children
+	t := set_of({
+		'a.xml': '<r><g n="1"/></r>'
+		'b.xml': '<r><g n="1"><c/></g></r>'
+	})
+	assert t.merge(parse_rules('r g key=@n merge')!)!.xml() == '<r><g n="1"><c/></g></r>'
+	// text kept, whitespace beside it not joined to it
+	u := set_of({
+		'a.xml': '<r><p k="1">text</p></r>'
+		'b.xml': '<r>\n  <p k="1">\n    <c/>\n  </p>\n</r>'
+	})
+	assert u.merge(parse_rules('r p key=@k merge')!)!.xml() == '<r><p k="1">text<c/></p></r>'
+}
+
+fn test_a_merged_view_keeps_its_namespaces() {
+	s := set_of({
+		'a.xml': '<r xmlns="urn:a" xmlns:p="urn:p"><p:i id="1"/></r>'
+		'b.xml': '<r xmlns="urn:b" xmlns:p="urn:q"><p:i id="2"><c/></p:i></r>'
+	})
+	m := s.merge(parse_rules('r p:i key=@id merge')!)!
+	out := m.xml()
+	assert out == '<r xmlns="urn:a" xmlns:p="urn:p"><p:i id="1"/><p:i xmlns="urn:b" xmlns:p="urn:q" id="2"><c/></p:i></r>'
+	mut d := parse_string(out)!
+	d.resolve_namespaces()!
+	for n in d.node(d.root()).descendants('c') {
+		assert d.ns_uri(d.ns_of(n.i)) == 'urn:b'
+	}
+}
+
+fn test_a_split_document_merged_and_written_is_the_document() {
+	rules := parse_rules(split_rules) or { panic(err) }
+	mut r := Rng{0x9E37_79B9_7F4A_7C15}
+	for round in 0 .. 200 {
+		files := 1 + r.intn(6)
+		groups := unique_keys(mut r, 'g', 1 + r.intn(4)).map(gen_group(mut r, it, 0, files))
+		whole := '<model>' + groups.map(it.write(-1)).join('') + '</model>'
+		orig := parse_string(whole) or { panic(err) }
+		mut parts := map[string]string{}
+		for f in 0 .. files {
+			parts['part${f}.xml'] = '<model>' + groups.map(it.write(f)).join('') + '</model>'
+		}
+		m := set_of(parts).merge(rules) or { panic(err) }
+		out := m.xml()
+		// read back, the document
+		written := parse_string(out) or { panic('${err}\n${out}') }
+		assert written.subtree_bytes(written.root()) == orig.subtree_bytes(orig.root()), 'round ${round}'
+		// merged alone, the merged view
+		again := set_of({
+			'out.xml': out
+		}).merge(rules) or { panic(err) }
+		same_tree(again.root(), orig.root_node()) or { panic('round ${round}: ${err}') }
+		same_tree(m.root(), written.root_node()) or { panic('round ${round}: ${err}') }
+	}
 }

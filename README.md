@@ -144,8 +144,11 @@ end tag, so the parse and the 28 bytes a node takes are unchanged. What is not c
 from the tree's parts: names as interned, values decoded and escaped again for where they go
 (text, with text that is only whitespace as character references so that it is still read as
 text; an attribute value between the quote that needs fewer escapes; CDATA), and an element
-written on its own (`outer_xml`) carries the namespace declarations in scope where it was. Edits
-will be written the same way: copied around what changed ([docs/documents.md](docs/documents.md)).
+written on its own (`outer_xml`) carries the namespace declarations in scope where it was. A
+merged view is written as one document the same way (`Merged.write`, `flatxml merge -o OUT`): a
+node from one file with nothing merged into it below is copied whole, and any other is written
+from its first contribution with its merged children, each after the indentation and comments
+that stood before it.
 
 ```v
 import flatxml
@@ -456,6 +459,7 @@ tools/fuzz_vs_expat.py --ns --count 4000 bin/flatxml testdata/*.xml   # random e
 tools/bench.sh 500                             # against ElementTree and lxml
 tools/compare/run.sh <file>                    # against quick-xml, pugixml, lxml, ElementTree
 bin/flatxml merge --rules rules.txt parts/      # many files read as one by rules: size, time, problems
+bin/flatxml merge --rules rules.txt -o all.xml parts/   # ... and written as one document
 bin/flatxml diff [--rules rules.txt] old/ new/  # what changed: removed, added, moved, texts, attributes
 bin/flatxml apply --check old/ new/ out/       # that diff applied to old's files, written to out/
 tools/diff_vs_edits.py bin/flatxml *.xml       # known edits, each reported as exactly that change

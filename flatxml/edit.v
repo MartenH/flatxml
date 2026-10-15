@@ -1027,33 +1027,7 @@ fn (e &Edit) carried_decls(k u64) []string {
 	if !ne.placed {
 		return []
 	}
-	src := e.source_scope(k)
-	dst := e.scope_in(ne.parent)
-	own := e.own_decls(k)
-	mut prefixes := src.keys()
-	for p in dst.keys() {
-		if p !in src {
-			prefixes << p
-		}
-	}
-	prefixes.sort()
-	mut out := []string{}
-	for p in prefixes {
-		if p in own {
-			continue
-		}
-		have := src[p] or { '' }
-		there := dst[p] or { '' }
-		if have == there {
-			continue
-		}
-		if p == '' {
-			out << ' xmlns="${escape_attr(have, `"`)}"'
-		} else if have != '' {
-			out << ' xmlns:${p}="${escape_attr(have, `"`)}"'
-		}
-	}
-	return out
+	return scope_decls(e.source_scope(k), e.scope_in(ne.parent), e.own_decls(k))
 }
 
 // own_decls are the namespace declarations element k makes itself, as edited: prefix ('' for
