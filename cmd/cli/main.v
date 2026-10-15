@@ -4,9 +4,13 @@
 //                                  tools/check_vs_expat.py; --ns resolves namespaces
 //   flatxml stats <file>...        parse each file and print its size, node counts and parse time,
 //                                  and the time namespace resolution adds
+//   flatxml schema <xsd>...        compile an XML Schema and print what it holds
+//   flatxml schema --batch         compile one schema per stdin line (tab-separated documents),
+//                                  answering `ok` or `error<TAB>message` per line
 module main
 
 import flatxml
+import flatxml.xsd
 import os
 import strings
 import time
@@ -14,7 +18,9 @@ import time
 const usage = 'usage:
   flatxml dump [--ns] <file>    canonical element/text stream, for tools/check_vs_expat.py;
                                 --ns names elements and attributes {uri}local
-  flatxml stats <file>...       size, node counts, parse and namespace times of each file'
+  flatxml stats <file>...       size, node counts, parse and namespace times of each file
+  flatxml schema <xsd>...       compile an XML Schema (and what it imports), print what it holds
+  flatxml schema --batch        one schema per stdin line (documents tab-separated): ok | error<TAB>why'
 
 fn main() {
 	args := os.args[1..]
@@ -30,6 +36,16 @@ fn main() {
 				exit(2)
 			}
 			dump_events(args[args.len - 1], ns)
+		}
+		'schema' {
+			if args[1] == '--batch' {
+				schema_batch()
+				return
+			}
+			print_schema(args[1..]) or {
+				eprintln(err)
+				exit(1)
+			}
 		}
 		'stats' {
 			mut failed := false
@@ -47,6 +63,59 @@ fn main() {
 			eprintln(usage)
 			exit(2)
 		}
+	}
+}
+
+// schema_batch compiles one schema per line of stdin, for test runners that would otherwise
+// start a process per schema.
+fn schema_batch() {
+	mut out := os.stdout()
+	for {
+		line := os.get_raw_line()
+		if line == '' {
+			break
+		}
+		paths := line.trim_right('\r\n').split('\t')
+		answer := if _ := xsd.load(...paths) {
+			'ok\n'
+		} else {
+			'error\t${err.msg().replace('\n', ' ')}\n'
+		}
+		write_or_exit(mut out, answer)
+		out.flush()
+	}
+}
+
+// print_schema compiles the schema documents at paths and counts what they declare.
+fn print_schema(paths []string) ! {
+	sw := time.new_stopwatch()
+	s := xsd.load(...paths)!
+	took := sw.elapsed()
+	mut named_ct, mut named_st := 0, 0
+	for ct in s.complex_types {
+		if ct.name.local != 0 {
+			named_ct++
+		}
+	}
+	for st in s.simple_types {
+		if st.name.local != 0 {
+			named_st++
+		}
+	}
+	mut enums, mut patterns := 0, map[string]bool{}
+	for st in s.simple_types {
+		enums += st.enums.len
+		for p in st.patterns {
+			patterns[p] = true
+		}
+	}
+	println('${s.files.len} schema documents, compiled in ${ms(took)}')
+	println('  ${s.global_elements().len} global elements, ${s.elements.len} element declarations')
+	println('  ${s.complex_types.len} complex types (${named_ct} named), ${s.simple_types.len} simple types (${named_st} named)')
+	println('  ${s.attributes.len} attribute declarations, ${s.particles.len - 1} particles')
+	println('  ${enums} enumeration values, ${patterns.len} distinct patterns, ${s.appinfo.len} appinfo')
+	for n in s.notes {
+		println('  note: ${n}')
 	}
 }
 

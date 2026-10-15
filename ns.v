@@ -282,3 +282,30 @@ pub fn (d &Doc) ns_uri(id u32) string {
 pub fn (d &Doc) ns_id(uri string) ?u32 {
 	return d.ns_ids[uri] or { return none }
 }
+
+// ns_for_prefix is the namespace a prefix is bound to at element i, by the declarations on i and
+// its ancestors; '' asks for the default namespace (no_ns when none is in scope), and `xml` is
+// always bound. It reads qualified names written in attribute values or text, as XML Schema
+// does (`type="p:T"`). Needs `resolve_namespaces` to have run; none for an unbound prefix.
+pub fn (d &Doc) ns_for_prefix(i u32, prefix string) ?u32 {
+	if prefix == 'xml' {
+		return xml_ns
+	}
+	mut e := i
+	// The nearest declaration of the prefix, on i or an ancestor, wins.
+	for e != no_node {
+		lo, hi := d.attr_range(e)
+		for a := lo; a < hi; a++ {
+			if d.attr_ns_of(a) != xmlns_ns {
+				continue
+			}
+			name := d.names[d.attr_tag[a]]
+			declared := if name == 'xmlns' { '' } else { name['xmlns:'.len..] }
+			if declared == prefix {
+				return d.ns_ids[d.attr_value(a)] or { no_ns }
+			}
+		}
+		e = d.parent[e]
+	}
+	return if prefix == '' { no_ns } else { none }
+}
