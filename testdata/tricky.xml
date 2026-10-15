@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE root [
+  <!ELEMENT root ANY>
+  <!-- a ] inside a comment -->
+  <!ATTLIST root a CDATA "x>y">
+]>
+<!-- leading comment -->
+<?pi before root?>
+<root xmlns:x="urn:x" a='single "quoted"' b="tab	here
+newline" c="&#9;&#10;&#13;kept" d="&lt;&gt;&amp;&apos;&quot;">
+  <x:prefixed x:attr="1"/>
+  <p>Text with <b>bold</b>, <i>italic</i> and a tail.</p>
+  <p>  leading and trailing  </p>
+  <cdata><![CDATA[<not>&markup;]]></cdata>
+  <split>one<![CDATA[ two ]]>three<!-- c -->four<?pi mid?>five</split>
+  <refs>&#65;&#x42;&#x1F600;&#169; café 日本</refs>
+  <élément å="ä">ö</élément>
+  <ws-cdata><![CDATA[   ]]></ws-cdata>
+  <empty></empty><selfclosed   /><spaced  a = "1"   b='2'  ></spaced >
+  <deep><a><b><c><d><e>bottom</e></d></c></b></a></deep>
+  <multi>line one
+line twoline three
+line four</multi>
+</root >
+<!-- trailing -->
