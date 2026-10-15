@@ -47,6 +47,8 @@ mut:
 	ct_base    map[u32]u32   // complex type -> the complex type its simple content extends
 	ct_state   []u8          // finish: 0 not yet, 1 in progress, 2 done
 	agroup_ord map[u64]u32   // attribute group references made so far, per owner
+	st_where   []Pending     // per simple type: where it is declared (doc and node), for messages
+	st_done    []u8          // finish_simple_types: 0 not yet, 1 in progress, 2 done
 }
 
 // load reads and compiles the schema documents at paths, and the documents they import.
@@ -577,6 +579,10 @@ fn (mut r Reader) simple_type(c DocCtx, i u32, named bool) !u32 {
 		r.s.named_simple[st.name.key()] = idx
 	}
 	r.s.simple_types << st
+	r.st_where << Pending{
+		doc:  c.di
+		node: i
+	}
 	mut seen := false
 	for ch in r.xs_children(c, i)! {
 		local := c.d.local_name(ch)
@@ -638,6 +644,8 @@ fn (mut r Reader) restriction(c DocCtx, i u32, idx u32) ! {
 			'enumeration' {
 				n := r.s.simple_types[idx].enums.len
 				r.s.simple_types[idx].enums << value
+				// as a QName, should the type turn out to be one: resolved where it is written
+				r.s.simple_types[idx].enum_qnames << expanded_at(c.d, ch, value.trim_space())
 				r.only_annotations(c, ch, .enumeration, idx, n)!
 				continue
 			}
@@ -845,4 +853,16 @@ fn (mut r Reader) pend(c DocCtx, i u32, kind RefKind, slot u32, value string) ! 
 		doc:  c.di
 		node: i
 	}
+}
+
+// expanded_at is a value written at element i of schema document d, read as a QName: {uri}local
+// by the namespaces in scope there (unprefixed: the default namespace), or '' when it is not one.
+fn expanded_at(d &flatxml.Doc, i u32, v string) string {
+	if !is_qname(v) {
+		return ''
+	}
+	colon := v.index_u8(`:`)
+	prefix := if colon < 0 { '' } else { v[..colon] }
+	ns := d.ns_for_prefix(i, prefix) or { return '' }
+	return '{${d.ns_uri(ns)}}${v[colon + 1..]}'.clone()
 }
