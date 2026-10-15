@@ -288,6 +288,115 @@ fn test_appinfo_owners_and_markup() {
 	assert s.appinfo[3].text == '<tag k="v">x &amp; y</tag>'
 }
 
+fn test_appinfo_on_attribute_references_names_the_declaration() {
+	s := compile('<xs:attribute name="g" type="xs:string"/><xs:attribute name="h" type="xs:string"/>
+<xs:attributeGroup name="B"><xs:attribute name="b"/></xs:attributeGroup>
+<xs:attributeGroup name="A">
+  <xs:attribute name="local"><xs:annotation><xs:appinfo>local</xs:appinfo></xs:annotation></xs:attribute>
+  <xs:attributeGroup ref="t:B"/>
+  <xs:attribute ref="t:g"><xs:annotation><xs:appinfo>in group</xs:appinfo></xs:annotation></xs:attribute>
+</xs:attributeGroup>
+<xs:complexType name="Base"><xs:simpleContent><xs:extension base="xs:string"><xs:attribute name="base1"/><xs:attribute name="base2"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="X"><xs:simpleContent><xs:extension base="t:Base">
+  <xs:attribute ref="t:h"><xs:annotation><xs:appinfo>in type</xs:appinfo></xs:annotation></xs:attribute>
+  <xs:attributeGroup ref="t:A"/>
+</xs:extension></xs:simpleContent></xs:complexType>')!
+	g := u32(0) // the global declarations come first, in order
+	assert s.qname(s.attributes[g].name) == '{urn:test}g'
+	h := u32(1)
+	assert s.qname(s.attributes[h].name) == '{urn:test}h'
+	// an attribute group: its own uses first, as written, then those of the groups it references
+	a := s.attribute_group_named(tns, 'A')?
+	b := s.attribute_group_named(tns, 'B')?
+	groups := s.attribute_groups
+	assert s.qname(groups[a].name) == '{urn:test}A'
+	assert groups[a].own == 2
+	assert groups[a].uses.map(s.qname(s.attributes[it.decl].name)) == ['local', '{urn:test}g', 'b']
+	assert groups[b].uses.len == 1 && groups[b].own == 1
+	assert s.attribute_group_named(tns, 'Z') == none
+	// each annotation names the declaration it is about, whatever its owner
+	in_group := s.appinfo.filter(it.text == 'in group')[0]
+	assert in_group.owner == .group_attribute_use && in_group.idx == a && in_group.sub == 1
+	assert in_group.attr == u32(g)
+	assert groups[a].uses[in_group.sub].decl == in_group.attr
+	local := s.appinfo.filter(it.text == 'local')[0]
+	assert local.owner == .attribute && local.attr == local.idx
+	assert s.qname(s.attributes[local.attr].name) == 'local'
+	// a type extending another gets the base's attributes ahead of its own, so a use's index as
+	// written is not its index in the type; the declaration is
+	x := s.complex_type_named(tns, 'X')?
+	in_type := s.appinfo.filter(it.text == 'in type')[0]
+	assert in_type.owner == .attribute_use && in_type.idx == x && in_type.sub == 0
+	assert in_type.attr == h
+	assert s.complex_types[x].attrs[0].decl != h
+	assert s.complex_types[x].attrs.any(it.decl == h)
+	// what annotates no attribute says so
+	n := compile('<xs:element name="e" type="xs:string"><xs:annotation><xs:appinfo>e</xs:appinfo></xs:annotation></xs:element>')!
+	assert n.appinfo[0].attr == no_attr
+}
+
+fn test_a_group_reference_keeps_the_group() {
+	s := compile('<xs:element name="a" type="xs:string"/><xs:element name="b" type="xs:string"/>
+<xs:group name="G"><xs:sequence><xs:element ref="t:a"/></xs:sequence></xs:group>
+<xs:group name="H"><xs:choice><xs:element ref="t:b"/><xs:group ref="t:G"/></xs:choice></xs:group>
+<xs:complexType name="X"><xs:sequence>
+  <xs:group ref="t:G" minOccurs="0"/>
+  <xs:element ref="t:b"/>
+  <xs:group ref="t:H" maxOccurs="unbounded"/>
+</xs:sequence></xs:complexType>')!
+	gi := s.group_named(tns, 'G')?
+	hi := s.group_named(tns, 'H')?
+	assert s.group_named(tns, 'Z') == none
+	groups := s.groups
+	assert groups.len == 2
+	assert s.qname(groups[gi].name) == '{urn:test}G' && s.qname(groups[hi].name) == '{urn:test}H'
+	x := s.complex_type_named(tns, 'X')?
+	kids := s.particle_children(s.complex_types[x].particle)
+	assert kids.map(s.particles[it].group) == [gi, no_group, hi]
+	// the reference is the group's model, with its own counts
+	g := s.particles[kids[0]]
+	assert g.kind == .sequence && g.min == 0 && g.max == 1
+	assert g.term == s.particles[groups[gi].root].term && g.count == s.particles[groups[gi].root].count
+	assert s.particles[kids[2]].kind == .choice && s.particles[kids[2]].max == unbounded
+	// inside a group, a reference to another group is kept too
+	inner := s.particle_children(groups[hi].root)
+	assert inner.map(s.particles[it].group) == [no_group, gi]
+	assert s.particles[s.complex_types[x].particle].group == no_group
+	// a group's annotation is filed under the group, as an attribute group's is
+	n := compile('<xs:element name="a" type="xs:string"/><xs:group name="G"><xs:annotation><xs:appinfo>g</xs:appinfo></xs:annotation><xs:sequence><xs:element ref="t:a"/></xs:sequence></xs:group>
+<xs:attributeGroup name="A"><xs:annotation><xs:appinfo>ag</xs:appinfo></xs:annotation></xs:attributeGroup>')!
+	assert n.appinfo_of(.group, n.group_named(tns, 'G')?, 0).map(it.text) == ['g']
+	assert n.appinfo_of(.attribute_group, n.attribute_group_named(tns, 'A')?, 0).map(it.text) == ['ag']
+}
+
+fn test_an_attribute_group_that_includes_itself_is_refused_used_or_not() {
+	path := write_schema('cycle.xsd', head + '\n<xs:attributeGroup name="A"><xs:attributeGroup ref="t:B"/></xs:attributeGroup>\n<xs:attributeGroup name="B"><xs:attributeGroup ref="t:A"/></xs:attributeGroup></xs:schema>')
+	load(path) or {
+		assert err.msg() == '${path}:2:1: attribute group {urn:test}A includes itself'
+		return
+	}
+	assert false, 'compiled'
+}
+
+fn test_appinfo_has_its_position_and_an_index_by_owner() {
+	path := write_schema('pos.xsd', head + '\n<xs:element name="e" type="xs:string">\n  <xs:annotation><xs:appinfo>one</xs:appinfo><xs:appinfo>two</xs:appinfo></xs:annotation>\n</xs:element>\n<xs:simpleType name="L"><xs:restriction base="xs:string"><xs:enumeration value="a"/>\n<xs:enumeration value="b"><xs:annotation><xs:appinfo>b</xs:appinfo></xs:annotation></xs:enumeration></xs:restriction></xs:simpleType></xs:schema>')
+	s := load(path)!
+	assert s.appinfo_pos(s.appinfo[0]) == '${path}:3:18'
+	assert s.appinfo_pos(s.appinfo[1]) == '${path}:3:46'
+	assert s.appinfo_pos(s.appinfo[2]) == '${path}:6:42'
+	assert s.files[s.appinfo[2].file] == path
+	e := s.element(tns, 'e')?
+	assert s.appinfo_of(.element, e, 0).map(it.text) == ['one', 'two']
+	l := s.simple_type_named(tns, 'L')?
+	assert s.appinfo_of(.enumeration, l, 1).map(it.text) == ['b']
+	assert s.appinfo_of(.enumeration, l, 0) == []
+	assert s.appinfo_of(.schema, 0, 0) == []
+	// a group's annotation is kept after its content's, and still has its own line
+	gpath := write_schema('gpos.xsd', head + '\n<xs:element name="a" type="xs:string"/>\n<xs:group name="G">\n<xs:annotation><xs:appinfo>group</xs:appinfo></xs:annotation>\n<xs:sequence>\n<xs:element ref="t:a">\n<xs:annotation><xs:appinfo>ref</xs:appinfo></xs:annotation></xs:element>\n</xs:sequence></xs:group></xs:schema>')
+	g := load(gpath)!
+	assert g.appinfo.map('${it.text} ${it.line}:${it.col}') == ['ref 7:16', 'group 4:16']
+}
+
 // The paths of imported documents are copies: they outlive the documents, which load releases.
 fn test_file_paths_outlive_the_documents() {
 	other := write_schema('abs.xsd', '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:abs"/>')
