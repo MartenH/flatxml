@@ -301,8 +301,8 @@ const vschema = '
   <xs:element name="order">
     <xs:complexType>
       <xs:sequence>
-        <xs:element name="id" type="xs:string"/>
-        <xs:element name="line" type="t:Line" maxOccurs="unbounded"/>
+        <xs:element name="id" type="xs:string" minOccurs="0"/>
+        <xs:element name="line" type="t:Line" minOccurs="0" maxOccurs="unbounded"/>
         <xs:element name="note" type="t:Note" minOccurs="0"/>
         <xs:element name="plain" form="unqualified" type="xs:string" minOccurs="0"/>
         <xs:element name="abstract" type="t:Abstract" minOccurs="0"/>
@@ -312,7 +312,7 @@ const vschema = '
     </xs:complexType>
   </xs:element>
   <xs:complexType name="Line">
-    <xs:sequence><xs:element name="qty" type="xs:unsignedInt"/></xs:sequence>
+    <xs:sequence><xs:element name="qty" type="xs:unsignedInt" minOccurs="0"/></xs:sequence>
     <xs:attribute name="sku" type="xs:string" use="required"/>
   </xs:complexType>
   <xs:complexType name="Note" mixed="true">
@@ -558,7 +558,7 @@ fn test_review_cases_for_facets() {
 	assert run('<tm>13:00:00.5+01:00</tm>') == [.invalid_value]
 	assert run('<du>P12M</du><du>P1D</du><du>PT1440M</du>') == []
 	assert run('<du>P13M</du>') == [.invalid_value]
-	assert run('<gm>--05--</gm>') == []
+	assert run('<gm>--05</gm>') == []
 	// a QName enumeration compares namespaces, not prefixes
 	assert run('<qn>o:x</qn><qn>x</qn>') == []
 	assert run('<qn>z:x</qn>') == [.invalid_value]
@@ -567,4 +567,216 @@ fn test_review_cases_for_facets() {
 	assert ok_long
 	// a declaration may not use ENTITY directly either
 	assert fails('<xs:attribute name="img" type="xs:ENTITY"/>').contains('needs a DTD or notations: not supported')
+}
+
+// --- step 5: the order and number of children ----------------------------------------------
+
+const models = '
+  <xs:element name="seq">
+    <xs:complexType><xs:sequence>
+      <xs:element name="a" type="xs:string"/>
+      <xs:element name="b" type="xs:string" minOccurs="0" maxOccurs="2"/>
+      <xs:element name="c" type="xs:string"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+  <xs:element name="ch">
+    <xs:complexType><xs:choice minOccurs="1" maxOccurs="3">
+      <xs:element name="x" type="xs:string"/>
+      <xs:sequence><xs:element name="y" type="xs:string"/><xs:element name="z" type="xs:string"/></xs:sequence>
+    </xs:choice></xs:complexType>
+  </xs:element>
+  <xs:element name="rep">
+    <xs:complexType><xs:sequence minOccurs="2" maxOccurs="2">
+      <xs:element name="k" type="xs:string"/>
+      <xs:element name="v" type="xs:string" minOccurs="0"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+  <xs:element name="opt">
+    <xs:complexType><xs:sequence minOccurs="3" maxOccurs="3">
+      <xs:element name="o" type="xs:string" minOccurs="0"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+  <xs:element name="many">
+    <xs:complexType><xs:sequence>
+      <xs:element name="m" type="xs:string" minOccurs="2" maxOccurs="5000"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+  <xs:element name="any">
+    <xs:complexType><xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="p" type="xs:string"/>
+      <xs:element name="q" type="xs:string"/>
+    </xs:choice></xs:complexType>
+  </xs:element>
+'
+
+fn model_check(doc string) []string {
+	s := compile(models) or { panic(err) }
+	mut d := flatxml.parse_string(doc) or { panic(err) }
+	v := validate(mut d, s) or { panic(err) }
+	return v.findings.map('${it.kind}: ${it.msg}')
+}
+
+fn test_sequences() {
+	assert model_check('<seq xmlns="urn:test"><a/><c/></seq>') == []
+	assert model_check('<seq xmlns="urn:test"><a/><b/><b/><c/></seq>') == []
+	assert model_check('<seq xmlns="urn:test"><a/><b/><b/><b/><c/></seq>') == ['unexpected_element: <b> occurs too often in <seq>']
+	assert model_check('<seq xmlns="urn:test"><c/><a/></seq>') == ['unexpected_element: <c> is not expected here: expected <a> in <seq>']
+	assert model_check('<seq xmlns="urn:test"><a/><b/></seq>') == ['missing_element: <seq> is missing <c>']
+	assert model_check('<seq xmlns="urn:test"><a/><c/><a/></seq>') == ['unexpected_element: <a> is not expected here: the content is complete in <seq>']
+}
+
+fn test_choices_and_nested_groups() {
+	assert model_check('<ch xmlns="urn:test"><x/></ch>') == []
+	assert model_check('<ch xmlns="urn:test"><y/><z/><x/><y/><z/></ch>') == []
+	assert model_check('<ch xmlns="urn:test"><y/><x/></ch>')[0].contains('<x> is not expected here: expected <z>')
+	assert model_check('<ch xmlns="urn:test"><y/></ch>') == ['missing_element: <ch> is missing <z>']
+	assert model_check('<ch xmlns="urn:test"></ch>')[0].starts_with('missing_element: <ch> is missing')
+	assert model_check('<ch xmlns="urn:test"><x/><x/><x/><x/></ch>')[0].contains('<x> is not expected here: the content is complete')
+}
+
+fn test_repeated_groups_and_empty_bodies() {
+	assert model_check('<rep xmlns="urn:test"><k/><v/><k/></rep>') == []
+	assert model_check('<rep xmlns="urn:test"><k/><k/></rep>') == []
+	assert model_check('<rep xmlns="urn:test"><k/></rep>') == ['missing_element: <rep> is missing <k>']
+	assert model_check('<rep xmlns="urn:test"><k/><k/><k/></rep>') == ['unexpected_element: <k> occurs too often in <rep>']
+	// three occurrences that can each be empty: none, one or three children all fit
+	assert model_check('<opt xmlns="urn:test"/>') == []
+	assert model_check('<opt xmlns="urn:test"><o/><o/><o/></opt>') == []
+	assert model_check('<opt xmlns="urn:test"><o/><o/><o/><o/></opt>').len == 1
+}
+
+fn test_counts_are_counters() {
+	mut body := ''
+	for _ in 0 .. 5000 {
+		body += '<m/>'
+	}
+	assert model_check('<many xmlns="urn:test">${body}</many>') == []
+	assert model_check('<many xmlns="urn:test">${body}<m/></many>') == ['unexpected_element: <m> occurs too often in <many>']
+	assert model_check('<many xmlns="urn:test"><m/></many>') == ['missing_element: <many> is missing <m>']
+	// unordered content: any number, any order
+	assert model_check('<any xmlns="urn:test"><q/><p/><q/><q/></any>') == []
+	assert model_check('<any xmlns="urn:test"/>') == []
+}
+
+// content models of counts 0, 1 and unbounded, which the automaton decides
+const plain = '
+  <xs:group name="G"><xs:sequence><xs:element name="b" type="xs:string"/></xs:sequence></xs:group>
+  <xs:group name="O"><xs:sequence>
+    <xs:element name="n" type="xs:string" minOccurs="0"/><xs:element name="m" type="xs:string" minOccurs="0"/>
+  </xs:sequence></xs:group>
+  <xs:element name="twice">
+    <xs:complexType><xs:sequence>
+      <xs:group ref="t:G"/><xs:element name="x" type="xs:string"/><xs:group ref="t:G"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+  <xs:element name="mix">
+    <xs:complexType><xs:sequence>
+      <xs:element name="a" type="xs:string"/>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="b" type="xs:string"/>
+        <xs:sequence><xs:element name="c" type="xs:string"/><xs:element name="d" type="xs:string" minOccurs="0"/></xs:sequence>
+      </xs:choice>
+      <xs:element name="e" type="xs:string" minOccurs="0"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+  <xs:element name="nest">
+    <xs:complexType><xs:sequence minOccurs="0" maxOccurs="unbounded">
+      <xs:group ref="t:O"/>
+      <xs:element name="p" type="xs:string"/>
+      <xs:choice maxOccurs="unbounded"><xs:element name="q" type="xs:string"/><xs:element name="r" type="xs:string"/></xs:choice>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+  <xs:element name="alt">
+    <xs:complexType><xs:choice>
+      <xs:sequence><xs:element name="f" type="xs:string"/><xs:element name="g" type="xs:string" minOccurs="0"/></xs:sequence>
+      <xs:element name="h" type="xs:string" maxOccurs="unbounded"/>
+      <xs:sequence minOccurs="0"><xs:element name="i" type="xs:string"/></xs:sequence>
+    </xs:choice></xs:complexType>
+  </xs:element>
+'
+
+fn plain_check(doc string) []string {
+	s := compile(plain) or { panic(err) }
+	mut d := flatxml.parse_string(doc) or { panic(err) }
+	v := validate(mut d, s) or { panic(err) }
+	return v.findings.map('${it.kind}: ${it.msg}')
+}
+
+fn test_a_group_used_twice_is_two_places() {
+	assert plain_check('<twice xmlns="urn:test"><b/><x/><b/></twice>') == []
+	assert plain_check('<twice xmlns="urn:test"><b/></twice>') == ['missing_element: <twice> is missing <x>']
+	assert plain_check('<twice xmlns="urn:test"><b/><x/></twice>') == ['missing_element: <twice> is missing <b>']
+	// the same group twice, each able to be empty: a lone <a> could be either
+	upa := fails('<xs:group name="A"><xs:sequence><xs:element name="a" type="xs:string" minOccurs="0"/></xs:sequence></xs:group>
+		<xs:complexType name="T"><xs:sequence><xs:group ref="t:A"/><xs:group ref="t:A"/></xs:sequence></xs:complexType>')
+	assert upa.contains('Unique Particle Attribution'), upa
+}
+
+fn test_the_automaton_reports_what_the_walker_explains() {
+	assert plain_check('<mix xmlns="urn:test"><a/><c/><d/><b/><c/><e/></mix>') == []
+	assert plain_check('<mix xmlns="urn:test"><a/><d/></mix>') == ['unexpected_element: <d> is not expected here: the content is complete in <mix>']
+	assert plain_check('<nest xmlns="urn:test"><m/><p/></nest>') == ['missing_element: <nest> is missing <q> or <r>']
+	assert plain_check('<alt xmlns="urn:test"><h/><h/><h/></alt>') == []
+}
+
+// verdicts is whether the automaton and the walker each accept root's children kids.
+fn verdicts(s &Schema, root string, kids []string) (bool, bool) {
+	mut body := ''
+	for k in kids {
+		body += '<${k}/>'
+	}
+	mut d := flatxml.parse_string('<${root} xmlns="urn:test">${body}</${root}>') or { panic(err) }
+	mut vr := new_validator(mut d, s, Options{}) or { panic(err) }
+	i := d.root()
+	decl := vr.match_element(i, flatxml.no_node) or { panic('${root} is not declared') }
+	ct := s.elements[decl].typ.idx
+	dfa := vr.content_dfa(ct)
+	assert !isnil(dfa), '${root} has no automaton'
+	return vr.dfa_accepts(dfa, vr.type_index(ct), i), !vr.walk_content(i, ct)
+}
+
+fn test_the_automaton_and_the_walker_agree() {
+	s := compile(plain) or { panic(err) }
+	cases := {
+		'twice': ['b', 'x']
+		'mix':   ['a', 'b', 'c', 'd', 'e']
+		'nest':  ['n', 'm', 'p', 'q', 'r']
+		'alt':   ['f', 'g', 'h', 'i']
+	}
+	mut seed := u32(12345)
+	for root, names in cases {
+		mut accepted := 0
+		// every sequence of up to four children, then random ones of up to ten
+		mut seqs := [][]string{len: 1}
+		mut from := 0
+		for _ in 0 .. 4 {
+			to := seqs.len
+			for k in from .. to {
+				for nm in names {
+					mut next := seqs[k].clone()
+					next << nm
+					seqs << next
+				}
+			}
+			from = to
+		}
+		for _ in 0 .. 300 {
+			seed = seed * 1103515245 + 12345
+			mut kids := []string{}
+			for _ in 0 .. 5 + int(seed >> 16) % 6 {
+				seed = seed * 1103515245 + 12345
+				kids << names[int(seed >> 16) % names.len]
+			}
+			seqs << kids
+		}
+		for kids in seqs {
+			by_dfa, by_walker := verdicts(s, root, kids)
+			assert by_dfa == by_walker, '${root} ${kids}: automaton ${by_dfa}, walker ${by_walker}'
+			if by_dfa {
+				accepted++
+			}
+		}
+		// both answers occur, so the comparison means something
+		assert accepted > 0 && accepted < seqs.len, root
+	}
 }

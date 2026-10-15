@@ -143,8 +143,7 @@ fn g_key(root Builtin, v string) string {
 		}
 		else {
 			month := two_digits(v[2..], 1, 12) or { return '' }
-			rest := if v[4..].starts_with('--') { v[6..] } else { v[4..] }
-			return instant_key(1972, month, 1, 0, '', tz_minutes(rest))
+			return instant_key(1972, month, 1, 0, '', tz_minutes(v[4..]))
 		}
 	}
 }

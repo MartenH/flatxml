@@ -166,8 +166,20 @@ this element" before "is it in the right place".
      suite, invalid documents that pass fell from 1,191 to 20 and invalid schemas that compile from
      127 to 81, with no valid schema or document rejected; 463 real-world files still agree with
      libxml2. The 500 MB benchmark validates in about 1.0 s (the parse takes about 1.15 s).
-5. **Content models** (design 4). Order and occurrence, compared with lxml on the generated
-   mutations and the W3C suite, whose right-verdict rate should reach lxml's (about 99%).
+5. **Content models** (design 4, done). Order and occurrence: a content model whose counts are
+   all 0, 1 or unbounded is decided by its Glushkov automaton (`dfa.v`), built on first use, its
+   states the classes of positions followed alike; other counts by a walker with a counter per
+   group (`content.v`), which also explains every refusal. When a schema compiles, its content
+   models must be deterministic (Unique Particle Attribution) and give elements of one name one
+   type (Element Declarations Consistent), on the model with its group references expanded
+   (`glushkov.v`): a group used twice is two places. On the W3C suite, invalid documents that pass
+   fell from 20 to 0 and invalid schemas that compile from 81 to 34, with no valid schema or
+   document rejected: right on 99.2% of the schemas it compiles (lxml 98.6%) and every document it
+   judges (lxml 99.4%). `tools/content_vs_lxml.py` edits the 461 valid real-world files where
+   content models decide, 11,500 copies, and agrees with libxml2 on every verdict. Validating a
+   6.8 MB real-world file went from 7.8 ms to 8.8 ms (the parse takes about as long), the 500 MB
+   benchmark is unchanged, and compiling the largest real-world schema still takes about 60 ms,
+   since a model in which no name occurs twice cannot be ambiguous and skips the construction.
 6. **Typed values and the API** (design 7). Read values by type, and give users a small, safe
    surface over the arrays: node handles, iterators that allocate nothing, file-level shortcuts,
    findings with positions, a schema that cannot be changed from outside. The README's examples
@@ -195,10 +207,15 @@ Each is adopted at a step, and kept only if the benchmark or the suite shows it 
   5,000 states is a known denial of service (Xerces-J caps it at 5,000 under secure processing),
   and counts here are stored up to 2³²−2.
 - **Glushkov automata** (step 5), as Xerces builds them: the construction that gives a content
-  model's automaton also proves the Unique Particle Attribution rule.
-- **Unordered content as a set** (step 5): a choice of any number of children is one state looping
-  to itself, so it is the membership check step 3 already makes. Most content in the real-world
-  schemas is shaped that way.
+  model's automaton also proves the Unique Particle Attribution rule. A position's follow set is
+  kept as the particles whose first sets follow it, not their union, and positions followed by
+  the same particles are one state, so a repeated choice of hundreds of elements is one state and
+  one row of the table, not hundreds squared. Measured on the 6.8 MB real-world file: content
+  checking cost about 8 ms with the walker alone and costs about 1 ms with the automata, most of
+  it building the 96 tables the file needs.
+- **Unordered content as a set** (step 5), tried and dropped: a fast path for a repeated choice
+  of elements, which the real-world files did not measure faster; the automaton makes such a
+  model one state anyway.
 - **A null handle** (step 6), after pugixml: a missing node is a valid empty node, so
   `root.child('a').child('b').attr('x')` chains without a check at every step, with typed reads
   that take a default (`as_int(0)`).
