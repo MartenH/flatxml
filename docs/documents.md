@@ -229,7 +229,7 @@ Round trips, which need no oracle:
    (with no rules, always: `testdata/`); 200 random documents split into one to six files by their
    keys, merged and written, are the document again, and the written file merged alone is the same
    view. The 560 real-world files with their rules (936) write as one 160 MB document in about 0.35
-   s in memory (1.0–1.3 s to a file, synced to disk), and `flatxml diff` of the inputs against it,
+   s in memory (1.0–1.4 s to a file, synced to disk), and `flatxml diff` of the inputs against it,
    both merged by the rules, finds one change: a declaration of the reserved `xml` prefix on the
    root of a later file, which binds nothing and is not carried.
 

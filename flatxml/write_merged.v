@@ -215,7 +215,7 @@ fn (mut w MergedWriter) element(mut em Emitter, n u32, end u32, scope map[string
 		return
 	}
 	em.start_tag(d, i, extras, decls, ste, false)!
-	ets := w.content(mut em, n, d, i, ste, closed, inner)!
+	ets := w.content(mut em, n, d, ste, closed, inner)!
 	if closed {
 		em.put('</${d.name(i)}>')!
 	} else {
@@ -296,10 +296,10 @@ fn prefix_of(name string) string {
 	return if name.contains(':') { name.all_before(':') } else { '' }
 }
 
-// content writes the content of merged node n, whose first contribution is element i of d, and
+// content writes the content of merged node n, whose first contribution is an element of d, and
 // returns where that contribution's end tag starts. Whitespace is not written next to text,
 // where it would join it.
-fn (mut w MergedWriter) content(mut em Emitter, n u32, d &Doc, i u32, ste u32, closed bool, scope map[string]string) !u32 {
+fn (mut w MergedWriter) content(mut em Emitter, n u32, d &Doc, ste u32, closed bool, scope map[string]string) !u32 {
 	m := w.m
 	// the layout of every contribution's children, where they are needed
 	flo := m.frag_lo[n]
@@ -353,7 +353,7 @@ fn (mut w MergedWriter) content(mut em Emitter, n u32, d &Doc, i u32, ste u32, c
 	}
 	// the bytes before the end tag: the first contribution's, or, where it has no end tag, those
 	// of one that has
-	mut td := d
+	mut td := unsafe { d }
 	mut tl := l0
 	mut tste := ste
 	if closed {
