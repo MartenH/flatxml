@@ -88,8 +88,12 @@ jobs:
           path: ${{ runner.temp }}/fuzz
           if-no-files-found: ignore
 
-  # The command cross-built for Windows (mingw-w64) and run there: reading, writing over an
-  # existing file, edits, a merge and a diff, compared with what Linux writes.
+  # Windows. The cross-build is what a Linux host makes for Windows; the Linux binary writes the
+  # bytes the Windows run must match. The Windows job runs the unit tests with a native V (the
+  # pinned V3, prebuilt for C:\v-ct and published as an asset of MartenH/blobly_net's v-toolchain
+  # release, since V's own makev.bat does not finish on the runner) and runs the command:
+  # reading, writing (over an existing file and over its own source), edits, apply (also in
+  # place), merge, merge3 and diff, each exit status checked exactly.
   windows-build:
     runs-on: ubuntu-latest
     steps:
@@ -98,44 +102,87 @@ jobs:
       - name: Set up pinned V
         uses: ./.github/actions/setup-v
 
-      - name: Cross-build for Windows
+      - name: Cross-build for Windows, and Linux's bytes to compare with
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
           mkdir -p win
-          v -os windows -cc x86_64-w64-mingw32-gcc -o win/flatxml.exe cmd/cli
-          v -o bin-linux-flatxml cmd/cli
-          printf 'attr\t/\tk\tv\ninsert\t/\t0\t<n/>\nmove\t/1\t0\t/0\n' | ./bin-linux-flatxml edit testdata/tricky.xml win/edited-linux.xml -
+          v -os windows -cc x86_64-w64-mingw32-gcc -o win/flatxml-cross.exe cmd/cli
+          v -o linux-flatxml cmd/cli
+          printf 'attr\t/\tk\tv\ninsert\t/\t0\t<n/>\nmove\t/1\t0\t/0\n' | ./linux-flatxml edit testdata/tricky.xml win/edited.xml -
+          printf 'attr\t/\tt\tw\n' | ./linux-flatxml edit testdata/tricky.xml win/theirs.xml -
+          ./linux-flatxml merge3 testdata/tricky.xml win/edited.xml win/theirs.xml win/merged3.xml
+          : > win/empty.rules
+          ./linux-flatxml merge --rules win/empty.rules -o win/merged.xml testdata/tricky.xml win/edited.xml
 
       - uses: actions/upload-artifact@v4
         with:
           name: flatxml-windows
           path: win
 
-  windows-run:
+  windows:
     needs: windows-build
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
+    env:
+      V_ASSET: v-e7bb21c-windows.zip # the V of .v-version, minted by blobly_net's scripts/mint_windows_v.sh
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
           name: flatxml-windows
-          path: win
+          path: linux
 
-      - name: Run on Windows
+      - name: Download the prebuilt V
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $pin = (Get-Content .v-version).Trim()
+          if (-not $env:V_ASSET.Contains($pin.Substring(0, 7))) { throw "$env:V_ASSET is not the V of .v-version ($pin)" }
+          gh release download v-toolchain --repo MartenH/blobly_net --pattern "$env:V_ASSET" --dir "$env:RUNNER_TEMP"
+          Expand-Archive -LiteralPath "$env:RUNNER_TEMP\$env:V_ASSET" -DestinationPath C:\v-ct -Force
+          & C:\v-ct\v.exe version
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc diffutils
+
+      - name: Unit tests
+        shell: msys2 {0}
+        run: /c/v-ct/v.exe -cc gcc test .
+
+      - name: The command
+        shell: msys2 {0}
         run: |
           set -e
-          win/flatxml.exe roundtrip testdata
-          win/flatxml.exe write testdata/tricky.xml "$RUNNER_TEMP/copy.xml"
-          cmp testdata/tricky.xml "$RUNNER_TEMP/copy.xml"
-          # over an existing file
-          win/flatxml.exe write testdata/namespaces.xml "$RUNNER_TEMP/copy.xml"
-          cmp testdata/namespaces.xml "$RUNNER_TEMP/copy.xml"
-          printf 'attr\t/\tk\tv\ninsert\t/\t0\t<n/>\nmove\t/1\t0\t/0\n' | win/flatxml.exe edit testdata/tricky.xml "$RUNNER_TEMP/edited.xml" -
-          cmp win/edited-linux.xml "$RUNNER_TEMP/edited.xml"
-          win/flatxml.exe apply --check testdata/tricky.xml "$RUNNER_TEMP/edited.xml" "$RUNNER_TEMP/applied.xml"
-          # a diff that finds changes exits 1
-          if win/flatxml.exe diff testdata/tricky.xml "$RUNNER_TEMP/edited.xml"; then exit 1; fi
+          /c/v-ct/v.exe -cc gcc -o flatxml.exe cmd/cli
+          t=$(cygpath -u "$RUNNER_TEMP")
+          # status is the exit status of a command that may fail
+          status() { "$@" >/dev/null 2>&1 && echo 0 || echo $?; }
+          ./flatxml.exe roundtrip testdata
+          linux/flatxml-cross.exe roundtrip testdata
+          # a copy, then a write over it, then a write over its own source
+          ./flatxml.exe write testdata/tricky.xml "$t/copy.xml"
+          cmp testdata/tricky.xml "$t/copy.xml"
+          ./flatxml.exe write testdata/namespaces.xml "$t/copy.xml"
+          cmp testdata/namespaces.xml "$t/copy.xml"
+          ./flatxml.exe write "$t/copy.xml" "$t/copy.xml"
+          cmp testdata/namespaces.xml "$t/copy.xml"
+          # edits, and their diff applied (to a new tree and in place)
+          printf 'attr\t/\tk\tv\ninsert\t/\t0\t<n/>\nmove\t/1\t0\t/0\n' | ./flatxml.exe edit testdata/tricky.xml "$t/edited.xml" -
+          cmp linux/edited.xml "$t/edited.xml"
+          ./flatxml.exe apply --check testdata/tricky.xml "$t/edited.xml" "$t/applied.xml"
+          cmp "$t/edited.xml" "$t/applied.xml"
+          cp testdata/tricky.xml "$t/inplace.xml"
+          ./flatxml.exe apply --in-place "$t/inplace.xml" "$t/edited.xml"
+          cmp "$t/edited.xml" "$t/inplace.xml"
+          # a three-way merge, and a merge of two files
+          ./flatxml.exe merge3 testdata/tricky.xml "$t/edited.xml" linux/theirs.xml "$t/merged3.xml"
+          cmp linux/merged3.xml "$t/merged3.xml"
+          ./flatxml.exe merge --rules linux/empty.rules -o "$t/merged.xml" testdata/tricky.xml linux/edited.xml
+          cmp linux/merged.xml "$t/merged.xml"
+          # a diff exits 1 on changes, 0 on none
+          [ "$(status ./flatxml.exe diff testdata/tricky.xml "$t/edited.xml")" = 1 ]
+          cp testdata/tricky.xml "$t/same.xml"
+          [ "$(status ./flatxml.exe diff testdata/tricky.xml "$t/same.xml")" = 0 ]

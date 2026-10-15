@@ -1,34 +1,25 @@
 module flatxml
 
 import os
+import time
 
 #include <io.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 
 // C's int is 32 bits; V3's int is 64, so C returns are declared i32.
+fn C._wopen(path &u16, flags i32, mode i32) i32
 fn C._write(fd i32, buf voidptr, n u32) i32
 fn C._close(fd i32) i32
 fn C._commit(fd i32) i32
 fn C.MoveFileExW(src &u16, dst &u16, flags u32) i32
+fn C.ReplaceFileW(replaced &u16, replacement &u16, backup &u16, flags u32, exclude voidptr, reserved voidptr) i32
+fn C.GetFileAttributesW(path &u16) u32
 
-// Node and attribute offsets are stored as u32, so a document must be smaller than 4 GiB.
-pub const max_src_len = int(u32(0xFFFF_FFFF))
-
-// map_file reads the file at path into memory that unmap_file releases (Windows has no mmap of
-// the POSIX kind; a mapping through the Windows API would keep the file locked while it is
-// open).
-fn map_file(path string) !(&u8, int) {
-	if !os.is_file(path) {
-		return error('${path}: not a file')
-	}
-	size := int(os.file_size(path))
-	if size == 0 {
-		return error('${path}: empty file')
-	}
-	if size > max_src_len {
-		return error('${path}: files of 4 GiB or more are not supported (offsets are u32)')
-	}
+// map_bytes reads size bytes of the file at path into memory that unmap_file releases (Windows
+// has no mmap of the POSIX kind, and a mapping through the Windows API would keep the file open
+// and so stop it being replaced).
+fn map_bytes(path string, size int) !&u8 {
 	mut f := os.open(path) or { return error('${path}: cannot open file') }
 	defer {
 		f.close()
@@ -39,80 +30,92 @@ fn map_file(path string) !(&u8, int) {
 	}
 	mut got := 0
 	for got < size {
-		n := f.read_into_ptr(unsafe { p + got }, size - got) or {
-			unsafe { C.free(p) }
-			return error('${path}: cannot read file')
-		}
+		n := f.read_into_ptr(unsafe { p + got }, size - got) or { 0 }
 		if n <= 0 {
 			unsafe { C.free(p) }
 			return error('${path}: cannot read file')
 		}
 		got += n
 	}
-	return p, size
+	return p
 }
 
 fn unmap_file(p &u8, _ int) {
 	unsafe { C.free(voidptr(p)) }
 }
 
-// FileOut is a file opened for writing, whose every write and close is checked.
-struct FileOut {
-	path string
-mut:
-	fd i32 = -1
+// sys_create creates path exclusively for binary writing. Windows has no permission bits to
+// keep: replace_file keeps the replaced file's attributes and access control instead.
+fn sys_create(path string, _ ?u32) i32 {
+	w := path.replace('/', '\\').to_wide()
+	defer {
+		unsafe { free(w) }
+	}
+	return C._wopen(w, C._O_WRONLY | C._O_CREAT | C._O_EXCL | C._O_BINARY, C._S_IREAD | C._S_IWRITE)
 }
 
-// create_file creates path, which must not exist, for binary writing. Windows has no permission
-// bits to keep: the mode given is not used.
-fn create_file(path string, _ ?u32) !FileOut {
-	fd := C._wopen(path.replace('/', '\\').to_wide(),
-		C._O_WRONLY | C._O_CREAT | C._O_EXCL | C._O_BINARY, C._S_IREAD | C._S_IWRITE)
-	if fd < 0 {
-		return error('${path}: cannot create file')
-	}
-	return FileOut{
-		path: path
-		fd:   i32(fd)
-	}
+fn sys_write(fd i32, p voidptr, n int) int {
+	return int(C._write(fd, p, u32(n)))
 }
 
-// write writes buf, at most 1 GiB per call.
-fn (mut f FileOut) write(buf []u8) !int {
-	n := C._write(f.fd, buf.data, u32(if buf.len > 1 << 30 { 1 << 30 } else { buf.len }))
-	if n <= 0 {
-		return error('${f.path}: write failed')
-	}
-	return int(n)
+fn sys_close(fd i32) i32 {
+	return C._close(fd)
 }
 
-fn (mut f FileOut) close() ! {
-	if f.fd >= 0 && C._close(f.fd) != 0 {
-		f.fd = -1
-		return error('${f.path}: write failed')
-	}
-	f.fd = -1
+fn sys_sync(fd i32) i32 {
+	return C._commit(fd)
 }
 
-// sync_and_close puts the file's contents on disk, then closes it.
-fn (mut f FileOut) sync_and_close() ! {
-	if C._commit(f.fd) != 0 {
-		f.close() or {}
-		return error('${f.path}: write failed')
-	}
-	f.close()!
-}
+// the Windows errors a replacement is tried again on: another process (a virus scanner, the
+// search indexer) has one of the files open for a moment
+const replace_retry_codes = [u32(5), 32, 33, 1175, 1176] // access denied, sharing and lock
 
-// replace_file renames tmp to target, replacing target if it exists.
+// violations, ReplaceFileW unable to remove the replaced file or to move the replacement
+
+// replace_file puts tmp in target's place. An existing target is replaced by ReplaceFileW, which
+// keeps its attributes and access control; a read-only one is refused. A missing target is moved
+// to with MoveFileExW. A file another process holds open for a moment is tried again, for up to
+// about two and a half seconds; an error says Windows' error code.
 fn replace_file(tmp string, target string) ! {
-	// MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
-	if C.MoveFileExW(tmp.replace('/', '\\').to_wide(), target.replace('/', '\\').to_wide(),
-		u32(0x1 | 0x8)) == 0 {
-		return error('${target}: cannot replace it with ${tmp}')
+	wt := target.replace('/', '\\').to_wide()
+	wn := tmp.replace('/', '\\').to_wide()
+	defer {
+		unsafe {
+			free(wt)
+			free(wn)
+		}
+	}
+	attrs := C.GetFileAttributesW(wt)
+	mut exists := attrs != u32(0xFFFF_FFFF)
+	if exists && attrs & 0x1 != 0 { // FILE_ATTRIBUTE_READONLY
+		return error('${target}: read-only, not replaced')
+	}
+	mut wait := 10
+	for attempt := 0; true; attempt++ {
+		ok := if exists {
+			// REPLACEFILE_IGNORE_MERGE_ERRORS
+			C.ReplaceFileW(wt, wn, unsafe { nil }, 0x2, unsafe { nil }, unsafe { nil }) != 0
+		} else {
+			C.MoveFileExW(wn, wt, 0x8) != 0 // MOVEFILE_WRITE_THROUGH
+		}
+		if ok {
+			return
+		}
+		code := C.GetLastError()
+		if exists && code == 2 { // ERROR_FILE_NOT_FOUND: the target went meanwhile
+			exists = false
+			continue
+		}
+		if code !in replace_retry_codes || attempt >= 8 {
+			return error('${target}: cannot replace it with ${tmp} (Windows error ${code})')
+		}
+		time.sleep(wait * time.millisecond)
+		wait *= 2
 	}
 }
 
-// sync_dir has nothing to do on Windows: MoveFileExW with MOVEFILE_WRITE_THROUGH returns once the
-// rename is on disk.
+// sync_dir has no Windows counterpart: a directory cannot be flushed like a file. The rename is
+// recorded by the file system's own journal, so after a crash the target is the old file or the
+// new one, but a rename made just before a power loss may be lost.
 fn sync_dir(_ string) ! {
 }

@@ -42,8 +42,9 @@ pub fn (d &Doc) write(mut w io.Writer, opts WriteOptions) ! {
 
 // write_file writes the document as XML to path, through a temporary file in the same directory
 // that replaces path once it is complete and on disk, so the document may be written over its own
-// file. A file that is replaced keeps its permissions; a symbolic link stays one, and the file it
-// points to is written.
+// file. A file that is replaced keeps its permissions (on Windows its attributes and access
+// control, and a read-only file is refused); a symbolic link stays one, and the file it points to
+// is written.
 pub fn (d &Doc) write_file(path string, opts WriteOptions) ! {
 	write_file_with(d, path, ModePlan{ mode: opts.mode })!
 }
