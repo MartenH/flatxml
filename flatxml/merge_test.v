@@ -713,8 +713,11 @@ fn test_a_parent_named_by_its_class() {
 				children: ['i']
 			},
 		]
-		classify: fn (p MNode) string {
-			return if p.name() == 'w' && p.parent().key() == 'list' { 'list' } else { '' }
+		classify: fn (p Parent) string {
+			// what a classifier reads is complete: the name, key, ancestors and source nodes
+			assert p.fragments.len > 0 && p.fragments[0].name() == p.name
+			assert p.name == 'r' || p.ancestors.last().name == 'r'
+			return if p.name == 'w' && p.ancestors[0].key == 'list' { 'list' } else { '' }
 		}
 	}
 	m := s.merge(rules) or { panic(err) }
@@ -731,7 +734,7 @@ fn test_a_parent_named_by_its_class() {
 	}) or { panic(err) }
 	assert names_of(t.at_path('/list').child('w', '')) == ['i', 'i']
 	// a class needs a classifier, and a path is of names
-	for bad in ['%c i', 'a/*/b i', 'a//b i', 'a/%c i'] {
+	for bad in ['%c i', 'a/*/b i', 'a//b i', 'a/%c i', '% i'] {
 		rs := parse_rules(bad) or { panic(err) }
 		if _ := s.merge(rs) {
 			assert false, bad
@@ -750,7 +753,21 @@ fn test_a_key_of_every_occurrence() {
 	attrs := merged({
 		'a.xml': '<r><s><v k="2"/><v/><v k="1"/></s></r>'
 	}, 'r s key=v/@k+,@n')
-	assert names_of(attrs.root()) == ['s:2${key_list_sep}1${key_sep}']
+	assert names_of(attrs.root()) == ['s:2${key_list_sep}${key_list_sep}1${key_sep}']
+	// an occurrence without the attribute keeps its place
+	places := merged({
+		'a.xml': '<r><s><v k="1"/><v/></s></r>'
+		'b.xml': '<r><s><v/><v k="1"/></s></r>'
+	}, 'r s key=v/@k+ merge')
+	assert places.root().child_count() == 2
+	assert show_key(attrs.root().kids()[0].key()) == '2||1,'
+	// `+` reads the elements at a path
+	for bad in ['r s key=+', 'r s key=@id+'] {
+		rs := parse_rules(bad) or { panic(err) }
+		if _ := places.set.merge(rs) {
+			assert false, bad
+		}
+	}
 }
 
 fn test_children_without_a_key_as_one_empty_key() {
@@ -765,6 +782,21 @@ fn test_children_without_a_key_as_one_empty_key() {
 	empty := m.root().child('s', '')
 	assert empty.fragment_count() == 2 && names_of(empty) == ['v', 'w']
 	assert m.root().child('t', '').fragment_count() == 2
+	// a key with no text is the empty key, as an absent one is
+	lit := merged({
+		'a.xml': '<r><s id=""/><s/></r>'
+	}, 'r s key=@id keyless=empty merge')
+	assert lit.problems.len == 0 && names_of(lit.root()) == ['s']
+	assert lit.root().child('s', '').fragment_count() == 2
+	// keyless is for keyed rules
+	for bad in ['r s keyless=empty', 'r s single keyless=empty'] {
+		rs := parse_rules(bad) or { panic(err) }
+		if _ := set_of({
+			'a.xml': '<r><s/></r>'
+		}).merge(rs) {
+			assert false, bad
+		}
+	}
 	// without merge, the second is a collision; by default, each is its own and reported
 	assert kinds(merged(files, 'r s,t key=@id keyless=empty')) == [.collision, .collision]
 	assert kinds(merged(files, 'r s,t key=@id merge')).filter(it == .missing_key).len == 4

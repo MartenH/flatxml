@@ -3,10 +3,28 @@ module flatxml
 // KeyFn computes a child's key where paths cannot say it; none means the child has no key.
 pub type KeyFn = fn (n Node) ?string
 
-// ClassFn names the class of a merged node whose children are being put together, for the rules
-// that name a parent by class (`%class`); '' for none. Its children are not made yet: it reads
-// the node's name, key, ancestors and fragments.
-pub type ClassFn = fn (parent MNode) string
+// ClassFn names the class of a parent whose children are being put together, for the rules that
+// name a parent by class (`%class`); '' for none.
+pub type ClassFn = fn (parent Parent) string
+
+// Parent is what a classifier reads of a merged node whose children are being put together. The
+// merged view is not readable while it is built, so this is all of it there is: the node's
+// name and key, the nodes of the set it is made of (whose attributes, text and children are the
+// documents', complete), and the names and keys of its merged ancestors.
+pub struct Parent {
+pub:
+	name      string
+	key       string     // its key; '' for a node without one
+	fragments []Node     // the nodes of the set that make it, in the set's order
+	ancestors []Ancestor // its merged ancestors, nearest first, the root last
+}
+
+// Ancestor is a merged ancestor of a Parent: its name and key.
+pub struct Ancestor {
+pub:
+	name string
+	key  string
+}
 
 // key_sep joins the parts of a key made of several paths. XML text cannot hold it, so two keys
 // of different parts never read alike.
@@ -16,10 +34,28 @@ pub const key_sep = '\x1f'
 // cannot hold it either.
 pub const key_list_sep = '\x1e'
 
+// show_key is a key for reading: its parts joined with `,` and a part's occurrences with `|`.
+pub fn show_key(k string) string {
+	return k.replace(key_sep, ',').replace(key_list_sep, '|')
+}
+
+// empty_key reports whether a key holds no text: '', or only separators.
+pub fn empty_key(k string) bool {
+	for c in k {
+		if c != `\x1f` && c != `\x1e` {
+			return false
+		}
+	}
+	return true
+}
+
 // Keyless is what a keyed rule makes of a child whose key parts are all absent.
 pub enum Keyless {
-	own   // a child of its own, reported as missing its key
-	empty // the one child of its name with no key: like a single child, it merges (with merge)
+	// a child of its own, reported as missing its key
+	own
+	// the one child of its name with the empty key (absent, or no text in any part), merged like
+	// a single child (with merge)
+	empty
 }
 
 // Rule says how the children of one aggregation are told apart and put together: the children
@@ -142,6 +178,9 @@ fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 	mut rules := []CRule{cap: rs.rules.len}
 	for k, r in rs.rules {
 		keyed := r.key.len > 0 || r.key_fn != none
+		if r.keyless != .own && !keyed {
+			return error('rule ${k + 1} (${r.parent} ${r.children}): keyless is for a keyed rule')
+		}
 		if r.key.len > 0 && r.key_fn != none {
 			return error('rule ${k + 1} (${r.parent} ${r.children}): key paths and a key function')
 		}
@@ -155,6 +194,9 @@ fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 		for p_ in r.key {
 			all := p_.ends_with('+')
 			p := if all { p_[..p_.len - 1] } else { p_ }
+			if all && (p == '' || p.starts_with('@')) {
+				return error('rule ${k + 1}: key part `${p_}`: `+` reads every element at a path, and names none')
+			}
 			at := p.index_u8(`@`)
 			if at >= 0 && (p[at..].contains('/') || at + 1 == p.len) {
 				return error('rule ${k + 1}: key path `${p}`: an attribute ends a path')
@@ -226,6 +268,9 @@ fn (mut cr CompiledRules) selector(parent string, t &Names, classifies bool) !u3
 		return 0
 	}
 	if parent.starts_with('%') {
+		if parent.len == 1 {
+			return error('`%` names no class')
+		}
 		if !classifies {
 			return error('`${parent}` names a class, and the rule set has no classifier')
 		}
@@ -271,7 +316,7 @@ fn (mut cr CompiledRules) new_selector() u32 {
 // most specific first. Where no class and no path can apply, its name alone decides it, once.
 fn (mut cr CompiledRules) context(m &Merged, p u32) u32 {
 	name := m.name[p]
-	classify := cr.classify
+	classify := if cr.classes.len > 0 { cr.classify } else { none }
 	if classify == none && name !in cr.paths {
 		if c := cr.name_ctx[name] {
 			return c
@@ -282,7 +327,7 @@ fn (mut cr CompiledRules) context(m &Merged, p u32) u32 {
 	}
 	mut class := u32(0)
 	if f := classify {
-		class = cr.classes[f(MNode{m, p})] or { 0 }
+		class = cr.classes[f(m.parent_view(p))] or { 0 }
 	}
 	paths := cr.paths[name] or { []Sel{} }
 	mut mask := u64(0)
@@ -393,11 +438,12 @@ fn (cr &CRule) key(c Node) ?string {
 fn (p &KeyPart) read(c Node) ?string {
 	if p.all && p.path.names.len > 0 {
 		mut texts := []string{}
+		// one slot an occurrence, '' where its attribute is absent, so length and order count
 		for n in c.find_all(p.path) {
-			if p.attr == no_name {
-				texts << n.text()
-			} else if v := n.doc.attr_by_id(n.i, p.attr) {
-				texts << v
+			texts << if p.attr == no_name {
+				n.text()
+			} else {
+				n.doc.attr_by_id(n.i, p.attr) or { '' }
 			}
 		}
 		return if texts.len == 0 { none } else { texts.join(key_list_sep) }

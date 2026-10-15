@@ -678,7 +678,7 @@ fn path_in(n MNode, mut places map[u32][]int) string {
 	for c.ok() {
 		mut step := c.name()
 		if c.keyed() {
-			step += '[${c.key().replace(key_sep, ',')}]'
+			step += '[${show_key(c.key())}]'
 		} else if c.m.kind[c.i] == .each {
 			p := c.parent()
 			if p.i !in places {

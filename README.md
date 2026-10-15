@@ -111,15 +111,15 @@ it gives another, a read gives `''` or the default asked for. Children and desce
 without allocating (descendants are a scan of the `tag` array), and a path (`a/b`) compiles once
 to name ids.
 
-**Merged views** (`DocSet.merge`) are built top down over a set, one merged node at a time, so
-a node's children are consecutive in its arrays and so are its fragments, the `(document,
-node)` pairs it is made of. A child's rule is looked up once per pair of names. Children are
-grouped by rule, then by key, and ordered by key, or as written where the rule says order
-matters. A rule names its parent by name, by a path of ancestor names, or by a class a callback
-gives, the most specific winning, and what applies is worked out once per kind of parent. A key is unique in its scope, the nearest ancestor that is not a single child, so a
-node is also found by its key path: one hash probe per key. 560 real-world files (1.78M
-elements) merge in about 0.2 s on one thread. The rules, and the problems the view reports,
-are in [docs/documents.md](docs/documents.md).
+**Merged views** (`DocSet.merge`) are built top down over a set, one merged node at a time, so a
+node's children are consecutive in its arrays and so are its fragments, the `(document, node)`
+pairs it is made of. Children are grouped by rule, then by key, and ordered by key, or as written
+where the rule says order matters. A rule names its parent by name, by a path of ancestor names,
+or by a class a callback gives, the most specific winning, and the rules that apply are worked
+out once per kind of parent. A key is unique in its scope, the nearest ancestor that is not a
+single child, so a node is also found by its key path: one hash probe per key. 560 real-world
+files (1.78M elements) merge in about 0.2 s on one thread. The rules, and the problems the view
+reports, are in [docs/documents.md](docs/documents.md).
 
 **Diffs** (`diff`) compare two merged views top down. Children the rules identify are matched
 by identity, and the rest are aligned by a longest common subsequence (Myers). Every subtree is
