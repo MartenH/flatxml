@@ -70,7 +70,7 @@ fn dump_events(path string) {
 	}
 	mut out := os.stdout()
 	mut sb := strings.new_builder(1 << 20)
-	mut depth := []int{len: d.len()}
+	mut depth := []u32{len: d.len()}
 	mut run := strings.new_builder(256)
 	mut run_parent := u32(0)
 	// Walk the nodes in document order; a run of text nodes under one parent is joined into one line.
@@ -100,16 +100,24 @@ fn dump_events(path string) {
 			flush_run(mut sb, mut run, depth[k])
 		}
 		if sb.len > 1 << 20 {
-			out.write_string(sb.str()) or {}
+			write_or_exit(mut out, sb.str())
 		}
 	}
 	if run.len > 0 {
 		flush_run(mut sb, mut run, depth[run_parent])
 	}
-	out.write_string(sb.str()) or {}
+	write_or_exit(mut out, sb.str())
 }
 
-fn flush_run(mut sb strings.Builder, mut run strings.Builder, depth int) {
+// write_or_exit writes s, or exits with status 1: a truncated dump must not look like a whole one.
+fn write_or_exit(mut out os.File, s string) {
+	out.write_string(s) or {
+		eprintln('flatxml: ${err}')
+		exit(1)
+	}
+}
+
+fn flush_run(mut sb strings.Builder, mut run strings.Builder, depth u32) {
 	t := run.str().trim(' \t\n\r')
 	if t.len > 0 {
 		sb.write_string('T ${depth} ${esc(t)}\n')

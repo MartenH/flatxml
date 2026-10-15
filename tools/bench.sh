@@ -9,15 +9,16 @@
 #   python ElementTree     the standard library
 #   lxml                   libxml2, if a python with lxml is found
 set -euo pipefail
-cd "$(dirname "$0")/.."
 mb=${1:?usage: tools/bench.sh <megabytes> [workdir]}
-work=${2:-/tmp/flatxml_bench}
+work=$(realpath -m "${2:-/tmp/flatxml_bench}")
+cd "$(dirname "$0")/.."
 mkdir -p "$work" bin
 export V_MACOS_V3_NO_FALLBACK=1
 v -prod -o bin/flatxml cmd/cli
 v -prod -o bin/genxml cmd/genxml
 f="$work/gen_${mb}.xml"
-[ -f "$f" ] || ./bin/genxml "$f" "$mb"
+# written aside and renamed, so an interrupted run never leaves a truncated document to reuse
+[ -f "$f" ] || { ./bin/genxml "$f.part" "$mb" && mv "$f.part" "$f"; }
 cat "$f" > /dev/null
 t() { /usr/bin/time -f "  wall %e s   peak RSS %M KB" "$@"; }
 echo "== flatxml"

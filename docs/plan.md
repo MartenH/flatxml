@@ -118,7 +118,7 @@ a real schema needs it, with its own tests.
   namespace mode in step 1.
 - **Performance:** `cmd/genxml` gains a schema for the documents it writes, so the validation
   benchmark is ours end to end. Validating the 500 MB document should take no longer than parsing
-  it (1.44 s), since it is one more linear pass of table lookups with a regex on some leaves. Peak
+  it (about 1.2 s), since it is one more linear pass of table lookups with a regex on some leaves. Peak
   memory is recorded with it.
 
 ## Steps

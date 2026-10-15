@@ -61,16 +61,18 @@ fn main() {
 fn write_device(mut sb strings.Builder, n int) {
 	sb.write_string('    <device id="d${n}" kind="${kinds[n % kinds.len]}">\n')
 	sb.write_string('      <name>Device ${n}</name>\n')
-	sb.write_string('      <serial>SN-${(n * 7919) % 1000003:07}</serial>\n')
+	sb.write_string('      <serial>SN-${(i64(n) * 7919) % 1000003:07}</serial>\n')
 	sb.write_string('      <enabled>${n % 3 != 0}</enabled>\n')
 	sb.write_string('      <settings>\n')
 	for k in 0 .. 3 {
 		u := units[(n + k) % units.len]
-		sb.write_string('        <setting key="p${k}" unit="${u}">${(n * 31 + k * 17) % 5000}</setting>\n')
+		sb.write_string('        <setting key="p${k}" unit="${u}">${(i64(n) * 31 + k * 17) % 5000}</setting>\n')
 	}
 	sb.write_string('      </settings>\n')
 	if n > 0 {
-		sb.write_string('      <link ref="d${(n * 13) % n}"/>\n')
+		// an earlier device, spread by a multiplicative hash
+		earlier := ((u64(n) * 0x9E3779B97F4A7C15) >> 32) % u64(n)
+		sb.write_string('      <link ref="d${earlier}"/>\n')
 	}
 	if n % 8 == 0 {
 		sb.write_string('      <note>Checked &lt;${n}&gt; &amp; <em>passed</em>, see device ${n / 2}.</note>\n')

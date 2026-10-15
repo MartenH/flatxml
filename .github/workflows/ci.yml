@@ -6,9 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A new push to a pull request cancels its previous run; every commit on main is verified.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # V3 retries a program it cannot build with a downloaded older compiler unless told not to, which
 # would let a V3 regression pass unseen (the variable is read on every platform, despite its

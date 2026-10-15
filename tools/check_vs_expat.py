@@ -60,7 +60,8 @@ def expat_dump(path):
 def files_of(paths, exts):
     for p in paths:
         if os.path.isdir(p):
-            for root, _, names in os.walk(p):
+            for root, dirs, names in os.walk(p):
+                dirs.sort()
                 for n in sorted(names):
                     if os.path.splitext(n)[1].lower().lstrip('.') in exts:
                         yield os.path.join(root, n)
@@ -86,8 +87,13 @@ def main():
             want = expat_dump(f)
         except xml.parsers.expat.ExpatError as e:
             want = [f'error: {e}']
-        r = subprocess.run([flatxml, 'dump', f], capture_output=True, text=True)
-        got = r.stdout.splitlines() if r.returncode == 0 else [f'error: {r.stderr.strip()}']
+        # flatxml writes text as the document's bytes; a document that is not UTF-8 then shows
+        # up as a difference rather than ending the run
+        r = subprocess.run([flatxml, 'dump', f], capture_output=True, text=True,
+                           encoding='utf-8', errors='replace')
+        # split on newlines only: the text may hold U+2028 and friends, which splitlines() breaks on
+        out = r.stdout[:-1] if r.stdout.endswith('\n') else r.stdout
+        got = (out.split('\n') if out else []) if r.returncode == 0 else [f'error: {r.stderr.strip()}']
         if got[:1] and want[:1] and got[0].startswith('error:') and want[0].startswith('error:'):
             print(f'ok    both reject  {f}\n  flatxml: {got[0]}\n  expat:   {want[0]}')
             continue

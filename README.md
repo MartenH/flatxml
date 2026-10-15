@@ -54,14 +54,14 @@ These measurements predate this repository. The parser has not changed since.
 ## Benchmark
 
 `tools/bench.sh 500`: a 500 MB document from `cmd/genxml`, warm in the page cache, on an Intel
-Core Ultra 9 285H under WSL2. It is dense: 12.8M elements and 12.4M attributes, an element every
+Core Ultra 9 285H under WSL2. It is dense: 12.6M elements and 12.3M attributes, an element every
 41 bytes. Speed per byte depends on that density, so compare files of the same shape.
 
 | parse only | wall | peak RSS |
 |---|---|---|
-| **flatxml** | 1.47 s (parse 1.44 s, 347 MB/s, 8.9M elements/s) | 1.3 GB, of which 500 MB is the mapped file |
-| Python `xml.etree.ElementTree` | 13.1 s | 5.8 GB |
-| lxml 5.3.1 (libxml2 2.12.9) | 12.5 s | 7.2 GB |
+| **flatxml** | 1.2–1.9 s (the parse itself 1.1–1.3 s: about 400 MB/s, 10M elements/s) | 1.1 GB, of which 500 MB is the mapped file |
+| Python `xml.etree.ElementTree` | 13.5 s | 5.7 GB |
+| lxml 5.3.1 (libxml2 2.12.9) | 12.2 s | 7.1 GB |
 
 ## Limitations
 
@@ -72,6 +72,8 @@ Non-validating, and lenient where that does not change how a well-formed file re
   accepted.
 - The DTD is skipped: entities it declares are unknown (an error on use), and default attribute
   values it declares are not applied.
+- Text is returned as the document's bytes. A document in an encoding other than UTF-8 (or
+  ASCII), such as ISO-8859-1 or UTF-16, is not converted.
 - No namespace processing yet. Names are compared as written. This is step 1 of the plan.
 - Whitespace-only text between tags is dropped, except in CDATA. In mixed content, this includes a
   whitespace-only run between two comments.
