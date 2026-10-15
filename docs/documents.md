@@ -54,10 +54,30 @@ annotations are kept for that), but none is needed.
    from text, one per line (`ITEMS ITEM key=NAME merge`), with the set's settings on lines that
    start with `!`, which no element name can (`!fold`, `!ignore ID`). A schema's annotations
    can be read into rules, by the caller that knows what they mean.
-4. **Diff.** Two documents (or two sets) are compared top down: children with keys matched by
-   key, the rest aligned in order (longest common subsequence over their names and contents). A
-   hash per subtree, computed once, skips identical subtrees whole. The result is an edit set:
-   added, removed, moved, text and attributes changed, each with both positions.
+4. **Diff** (built). `diff(old, new)` compares two merged views: two sets, each read by the
+   same rules, or two documents (`diff_docs`, `Doc.view`), which with no rules are each their own
+   tree. So the files a model is kept in, and the order the rules impose, are not changes. The
+   views are compared top down from the roots. Children the rules identify are matched by
+   identity: keyed ones by key, single ones by name. The rest are aligned in order: a longest
+   common subsequence of their subtrees (Myers' algorithm, after the common start and end are
+   taken off), then, between the subtrees that align, children of one name paired in order.
+   Past a bound on the differences in one list (1,000), the rest of it is matched greedily, so
+   no list costs quadratic time. Every node's subtree is hashed once (its name, own text,
+   attributes in any order, and children's hashes in order; the two views on two threads),
+   and a pair whose hashes agree is equal and not entered. Of the matched children, those off
+   a longest increasing run of their old places are moved, and a removed subtree equal to an
+   added one, anywhere, is moved too. A `Change` is removed, added, moved, text or attribute
+   changed, naming the node in each view (every fragment of it, so every file and line).
+   Text compared is a node's own text (`own_text`: beside child elements, the text runs
+   joined; a child's text is the child's). Names are compared as written.
+
+   A change carries what applying it needs: an added or moved node names the node of the old
+   view it goes under and its index among the new parent's children. Applied to the old view,
+   remove every removed node and lift out every moved one, then, parent by parent, put each
+   added or moved node at its index, lowest first: the nodes that stay are already in their
+   new order, so each index is right when it is used. Then set the texts and attributes. A
+   test applies diffs this way to a tree model and gets the new document every time. Step 5
+   does it with edits over the document's bytes, written back to the files.
 5. **Merged view** (built). `DocSet.merge(rules)` reads every document of a set as one: the
    merged root is the documents' roots, and a merged node's children are its fragments'
    children put together by the rules, then ordered: by aggregation in the rules' order (those
@@ -94,9 +114,10 @@ Round trips, which need no oracle:
 
 - **Writing an unedited document gives its file, byte for byte**: `testdata/`, generated
   documents, and locally the real-world files.
-- **A diff applied to its old document gives the new one**, tree for tree: on pairs made by the
-  mutation tools (random edits, swaps, removals, repeats), whose differences are known, and on
-  real files against later versions of themselves.
+- **A diff applied to its old document gives the new one**, tree for tree: on pairs made by
+  random edits (removals, additions, moves, texts and attributes changed), and on files edited
+  where the edits are known (`tools/diff_vs_edits.py`: a removal, a repeat, a swap, a text or an
+  attribute changed, each reported as exactly that one change).
 - **A file split into parts and merged back is the file**: a document divided among several files
   by its keys, merged, compares equal to the original as a tree.
 - **An edit written and read back is the edit**, and the same edit made by lxml gives the same
@@ -141,17 +162,30 @@ Round trips, which need no oracle:
    540 problems, all values that differ: 534 in two attributes that differ from file to file
    (one names the schema, one is an identifier), which `!ignore` leaves out, and 6 in the text
    of two copies of one definition.
-4. **Diff** (design 4), and `flatxml diff`: two files or two directories, the changes with their
-   positions.
+4. **Diff** (design 4, done), and `flatxml diff [--rules FILE] A B`: two files, directories or
+   lists, the changes with their paths and positions, exit 0 when there are none and 1 when
+   there are. Diffs of 400 random documents, each changed by one to four random edits, applied
+   to the old document as design 4 says, give the new one (with full alignment and with the
+   greedy one). With rules, 300 documents with known edits get exactly those changes, no more.
+   On 510 of the 560 real-world files (the other 50 lxml does not write back as the same tree),
+   5,090 copies each with one known edit (a removal, a repeat, a swap, a text or an attribute)
+   are each reported as exactly that one change. Two versions of 108 of the files (16 MB; 4
+   files differ, 431 lines by `diff -r`) compare as 131 changes with the rules (3 removed, 3
+   added, 5 texts, 120 attributes), read and merged in 60 ms and compared in 15 ms. The 560
+   files against a copy with 267 texts changed: 268 changes without rules (266 texts; one, in a
+   list of equal values, aligned as a removal and an addition), compared in 0.19 s, of which
+   hashing both sides' 1.78M nodes is 0.16 s; with the rules, a changed key is a removal and an
+   addition, and a key shared by fragments of one node in several files splits it.
 5. **Edits** (design 6), the write of an edited document, and `flatxml apply`: a diff applied to
    its old document gives the new one; edits on a merged view, written back to their own files.
 6. **Three-way merge**: two changed versions of one base.
 
 ## Techniques taken from other tools
 
-- **Subtree hashes** (step 4), as git compares trees and X-Diff compares documents: an unchanged
-  subtree is one hash comparison, so diffing two versions costs in proportion to what changed.
-- **Keyed matching, then ordered alignment** (step 4), as XyDiff and DeltaXML match by
+- **Subtree hashes** (step 4, built), as git compares trees and X-Diff compares documents: an
+  unchanged subtree is one hash comparison, so comparing two versions costs the hashing, once,
+  and then in proportion to what changed.
+- **Keyed matching, then ordered alignment** (step 4, built), as XyDiff and DeltaXML match by
   identifying attributes first: keyed elements match exactly, and only the unkeyed rest needs a
   longest-common-subsequence alignment (Myers' algorithm, as `diff` uses).
 - **Changes over an unchanged original** (step 5), as a text editor's piece table keeps the file

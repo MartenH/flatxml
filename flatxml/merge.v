@@ -590,9 +590,9 @@ fn (mut m Merged) limit(p u32, rule &CRule, k int, e int) int {
 	return k + rule.max
 }
 
-// differs reports where the contributions to node n disagree with its first: their text (all of
-// it, where text is mixed with elements), or the value of an attribute both have (unless the
-// rules ignore it).
+// differs reports where the contributions to node n disagree with its first: their own text
+// (beside child elements too, `Node.own_text`), or the value of an attribute both have (unless
+// the rules ignore it).
 fn (mut m Merged) differs(n u32) {
 	lo, hi := m.frag_lo[n], m.frag_lo[n + 1]
 	if hi - lo < 2 {
@@ -600,11 +600,11 @@ fn (mut m Merged) differs(n u32) {
 	}
 	f0 := m.frags[lo]
 	d0 := m.set.docs[f0.doc]
-	t0 := Node{d0, f0.i}.text()
+	t0 := Node{d0, f0.i}.own_text()
 	a_lo, a_hi := d0.attr_range(f0.i)
 	for f in m.frags[lo + 1..hi] {
 		d := m.set.docs[f.doc]
-		if Node{d, f.i}.text() != t0 {
+		if Node{d, f.i}.own_text() != t0 {
 			m.problems << Problem{
 				kind: .value_differs
 				node: n
@@ -794,7 +794,7 @@ fn (ix &KeyIndex) find(m &Merged, a u32, b u32, key string) ?u32 {
 pub struct MNode {
 pub:
 	m &Merged = unsafe { nil }
-	i u32 // no_mnode for an empty handle
+	i u32     = no_mnode // no_mnode for an empty handle
 }
 
 // len is the number of merged nodes.
@@ -1007,6 +1007,11 @@ pub fn (n MNode) fragments() []Node {
 // text is the text of the first contribution, all of it where text is mixed with elements.
 pub fn (n MNode) text() string {
 	return n.fragment(0).text()
+}
+
+// own_text is the own text of the first contribution (`Node.own_text`): not its children's.
+pub fn (n MNode) own_text() string {
+	return n.fragment(0).own_text()
 }
 
 // attr is the attribute name of the first contribution that has it; '' for none.

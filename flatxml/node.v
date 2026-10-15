@@ -59,6 +59,26 @@ pub fn (n Node) text() string {
 	return if n.doc.has_text_children(n.i) { n.doc.text_content(n.i) } else { n.doc.text(n.i) }
 }
 
+// own_text is the element's own text, decoded: its text, or, beside child elements, the text
+// beside them (not the text of the children), joined; '' for none.
+pub fn (n Node) own_text() string {
+	if n.i == no_node {
+		return ''
+	}
+	if !n.doc.has_text_children(n.i) {
+		return n.doc.text(n.i)
+	}
+	mut parts := []string{}
+	mut c := n.doc.first_child(n.i)
+	for c != no_node {
+		if n.doc.tag[c] == text_tag {
+			parts << n.doc.text(c)
+		}
+		c = n.doc.next_sibling(c)
+	}
+	return parts.join('')
+}
+
 // attr is the value of the attribute name, decoded; '' when there is none.
 pub fn (n Node) attr(name string) string {
 	if n.i == no_node {
