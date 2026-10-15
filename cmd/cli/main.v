@@ -2,8 +2,9 @@
 //
 //   flatxml dump [--ns] <file>     one line per element and per run of text, for
 //                                  tools/check_vs_expat.py; --ns resolves namespaces
-//   flatxml stats <file>...        parse each file and print its size, node counts and parse time,
-//                                  and the time namespace resolution adds
+//   flatxml stats [--parse-only] <file>...   parse each file and print its size, node counts and
+//                                  parse time, and (unless --parse-only) the time namespace
+//                                  resolution adds
 //   flatxml schema <xsd>...        compile an XML Schema and print what it holds
 //   flatxml schema --batch         compile one schema per stdin line (tab-separated documents),
 //                                  answering `ok` or `error<TAB>message` per line
@@ -22,7 +23,7 @@ import time
 const usage = 'usage:
   flatxml dump [--ns] <file>    canonical element/text stream, for tools/check_vs_expat.py;
                                 --ns names elements and attributes {uri}local
-  flatxml stats <file>...       size, node counts, parse and namespace times of each file
+  flatxml stats [--parse-only] <file>...   size, node counts, parse and namespace times
   flatxml schema <xsd>...       compile an XML Schema (and what it imports), print what it holds
   flatxml schema --batch        one schema per stdin line (documents tab-separated): ok | error<TAB>why
   flatxml validate <xsd> <doc>...  check documents against a schema
@@ -67,9 +68,10 @@ fn main() {
 			}
 		}
 		'stats' {
+			parse_only := args[1] == '--parse-only'
 			mut failed := false
-			for p in args[1..] {
-				print_stats(p) or {
+			for p in args[if parse_only { 2 } else { 1 }..] {
+				print_stats(p, parse_only) or {
 					eprintln(err)
 					failed = true
 				}
@@ -137,7 +139,8 @@ fn validate_files(schema string, docs []string) bool {
 				println('${path}:${line}:${col}: ${f.msg}')
 			}
 			more := if v.total > v.findings.len { ', ${v.findings.len} shown' } else { '' }
-			println('${path}: ${v.total} findings${more} (${ms(took)})')
+			noun := if v.total == 1 { 'finding' } else { 'findings' }
+			println('${path}: ${v.total} ${noun}${more} (${ms(took)})')
 		}
 		d.free()
 	}
@@ -155,6 +158,11 @@ fn validate_batch() {
 			break
 		}
 		fields := line.trim_right('\r\n').split('\t')
+		if fields.len < 2 || fields.any(it == '') {
+			write_or_exit(mut out, 'error\ta line is a document, then its schema documents\n')
+			out.flush()
+			continue
+		}
 		key := fields[1..].join('\t')
 		if key !in schemas {
 			schemas[key] = xsd.load(...fields[1..]) or {
@@ -219,7 +227,7 @@ fn print_schema(paths []string) ! {
 }
 
 // print_stats parses one file and prints what it holds and how long the parse took.
-fn print_stats(path string) ! {
+fn print_stats(path string, parse_only bool) ! {
 	sw := time.new_stopwatch()
 	mut d := flatxml.parse_file(path)!
 	took := sw.elapsed()
@@ -229,6 +237,10 @@ fn print_stats(path string) ! {
 	println('  ${mb(d.src_len)}, parsed in ${ms(took)} ${rate(d.src_len, took)}')
 	println('  ${d.len() - 1 - texts} elements, ${texts} text nodes, ${d.attr_tag.len} attributes, ${d.names.len - 2} distinct names')
 	println('  node arrays ${mb(used)} used, ${mb(reserved)} reserved')
+	if parse_only {
+		d.free()
+		return
+	}
 	ns_sw := time.new_stopwatch()
 	if _ := d.resolve_namespaces() {
 		ns_took := ns_sw.elapsed()

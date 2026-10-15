@@ -22,7 +22,7 @@ when that schema is expected valid and compiles:
     valid, accepted           the document is valid and flatxml found nothing
     invalid, reported         the document is invalid and flatxml found something
     refused                   the document uses something unsupported (xsi:type, a schema it
-                              names by xsi:schemaLocation, XML 1.1)
+                              names itself by xsi:schemaLocation, XML 1.1)
     invalid, accepted         the document is invalid by a rule flatxml does not check yet
     VALID, REPORTED           the document is valid and flatxml reported it: a failure
 
@@ -107,12 +107,15 @@ def read_suite(suite_dir):
         path = os.path.join(suite_dir, ref.get(XLINK))
         if not os.path.exists(path):
             skipped['set not fetched'] += 1
+            instances_skipped['set not fetched'] = instances_skipped.get('set not fetched', 0) + 1
             continue
         base = os.path.dirname(path)
         test_set = ET.parse(path).getroot()
         for group in test_set.findall(TS + 'testGroup'):
             if not applies(test_set) or not applies(group):
                 skipped['XSD 1.1 only'] += len(group.findall(TS + 'schemaTest'))
+                instances_skipped['XSD 1.1 only'] = (instances_skipped.get('XSD 1.1 only', 0)
+                                                     + len(group.findall(TS + 'instanceTest')))
                 continue
             schema_index = None
             # A group's schema test, then the instance tests that use its schema.

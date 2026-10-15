@@ -414,8 +414,24 @@ fn test_not_namespace_well_formed_is_an_error() {
 fn test_a_schema_the_document_names_elsewhere_is_unsupported() {
 	v := check('<o:order xmlns:o="urn:other" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:other other.xsd"/>')!
 	assert kinds(v) == [.unsupported]
-	assert v.findings[0].msg.contains('named by xsi:schemaLocation, which is not followed')
+	assert v.findings[0].msg.contains('named in the document (xsi:schemaLocation), which is not followed')
 	// xsi:type anywhere: the subtree is not assessed
 	w := check('<order xmlns="urn:test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="t:X"><bogus/></order>')!
 	assert kinds(w) == [.unsupported]
+}
+
+fn test_review_cases_for_validation() {
+	sch := '<xs:element name="r"><xs:complexType><xs:sequence><xs:element name="p" type="t:P" minOccurs="0"/><xs:element name="q" type="xs:string" minOccurs="0"/></xs:sequence></xs:complexType></xs:element><xs:complexType name="P"><xs:simpleContent><xs:extension base="xs:string"><xs:attribute name="u"/></xs:extension></xs:simpleContent></xs:complexType>'
+	s := compile(sch)!
+	run := fn [s] (doc string) []FindingKind {
+		mut d := flatxml.parse_string(doc) or { panic(err) }
+		return kinds(validate(mut d, s) or { panic(err) })
+	}
+	// text split by a comment or CDATA is still the text of simple content
+	assert run('<r xmlns="urn:test"><p u="a">10<!-- c -->0</p><q>x<![CDATA[y]]></q></r>') == []
+	// xsi:nil false is valid anywhere; true is an error, since nothing is nillable
+	assert run('<r xmlns="urn:test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><q xsi:nil="false">x</q></r>') == []
+	assert run('<r xmlns="urn:test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><q xsi:nil="true"/></r>') == [.not_nillable]
+	// a document in no namespace that names its own schema
+	assert run('<other xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="o.xsd"/>') == [.unsupported]
 }

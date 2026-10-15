@@ -11,6 +11,7 @@ pub enum FindingKind {
 	text_not_allowed     // text in element-only or empty content
 	children_not_allowed // child elements in simple or empty content
 	abstract_type        // the element's type is abstract
+	not_nillable         // xsi:nil="true" on an element that is not nillable (none is, here)
 	unsupported          // the document uses something this validator does not support (xsi:type)
 }
 
@@ -66,7 +67,7 @@ mut:
 	v       Validation
 	ns_map  []u32 // document namespace id -> schema namespace id (no_match when the schema has none)
 	name_map []u32 // document name id -> schema name id
-	index   map[u32]&TypeIndex
+	index   []&TypeIndex // per complex type, filled on first use
 	xsi     u32 // the document's id for the xsi namespace
 }
 
@@ -86,6 +87,7 @@ pub fn validate(mut d flatxml.Doc, s &Schema, opts Options) !Validation {
 			decl: []u32{len: d.len()}
 		}
 		xsi:  d.ns_id(xsi_ns_uri) or { no_match }
+		index: []&TypeIndex{len: s.complex_types.len, init: unsafe { nil }}
 	}
 	vr.map_names()
 	vr.walk()
@@ -131,7 +133,9 @@ fn (mut vr Validator) walk() {
 		// xsi:type replaces the declared type, which this validator cannot follow: the subtree is
 		// not assessed, and the finding says why
 		if vr.xsi_type(i) {
-			vr.find(i, .unsupported, 'xsi:type on <${d.name(i)}> is not supported')
+			if vr.keep() {
+				vr.add(i, .unsupported, 'xsi:type on <${d.name(i)}> is not supported')
+			}
 			k = int(d.end[i])
 			continue
 		}
@@ -148,14 +152,22 @@ fn (mut vr Validator) walk() {
 // located_elsewhere is the namespace of element i when the schema declares nothing in it and the
 // root's xsi:schemaLocation names a schema for it: the document expects a schema it was not given.
 fn (vr &Validator) located_elsewhere(i u32) ?string {
-	if vr.ns_map[vr.d.ns_of(i)] != no_match || vr.xsi == no_match {
+	if vr.xsi == no_match {
 		return none
 	}
 	uri := vr.d.ns_uri(vr.d.ns_of(i))
 	root := vr.d.root()
 	lo, hi := vr.d.attr_range(root)
 	for a := lo; a < hi; a++ {
-		if vr.d.attr_ns_of(a) == vr.xsi && vr.d.attr_local_name(a) == 'schemaLocation' {
+		if vr.d.attr_ns_of(a) != vr.xsi {
+			continue
+		}
+		// a document in no namespace names its schema by xsi:noNamespaceSchemaLocation
+		if uri == '' && vr.d.attr_local_name(a) == 'noNamespaceSchemaLocation' {
+			return 'no namespace'
+		}
+		if uri != '' && vr.ns_map[vr.d.ns_of(i)] == no_match
+			&& vr.d.attr_local_name(a) == 'schemaLocation' {
 			pairs := vr.d.attr_value(a).fields()
 			for k := 0; k + 1 < pairs.len; k += 2 {
 				if pairs[k] == uri {
@@ -186,9 +198,13 @@ fn (mut vr Validator) match_element(i u32, p u32) ?u32 {
 		key := vr.key(i) or { u64(0) }
 		return vr.s.global_elems[key] or {
 			if uri := vr.located_elsewhere(i) {
-				vr.find(i, .unsupported, 'the schema for ${uri} is named by xsi:schemaLocation, which is not followed')
+				if vr.keep() {
+					vr.add(i, .unsupported, 'the schema for ${uri} is named in the document (xsi:schemaLocation), which is not followed')
+				}
 			} else {
-				vr.find(i, .undeclared_element, '<${vr.d.name(i)}> is not declared as a root element')
+				if vr.keep() {
+					vr.add(i, .undeclared_element, '<${vr.d.name(i)}> is not declared as a root element')
+				}
 			}
 			return none
 		}
@@ -196,13 +212,17 @@ fn (mut vr Validator) match_element(i u32, p u32) ?u32 {
 	pd := vr.v.decl[p] - 1
 	t := vr.s.elements[pd].typ
 	if t.kind != .complex || vr.s.complex_types[t.idx].content in [.simple, .empty] {
-		vr.find(i, .children_not_allowed, '<${vr.d.name(p)}> has no child elements, so <${vr.d.name(i)}> is not allowed')
+		if vr.keep() {
+			vr.add(i, .children_not_allowed, '<${vr.d.name(p)}> has no child elements, so <${vr.d.name(i)}> is not allowed')
+		}
 		return none
 	}
 	idx := vr.type_index(t.idx)
 	key := vr.key(i) or { u64(0) }
 	return idx.children[key] or {
-		vr.find(i, .undeclared_element, '<${vr.d.name(i)}> is not allowed in <${vr.d.name(p)}>')
+		if vr.keep() {
+			vr.add(i, .undeclared_element, '<${vr.d.name(i)}> is not allowed in <${vr.d.name(p)}>')
+		}
 		return none
 	}
 }
@@ -213,11 +233,15 @@ fn (mut vr Validator) check_element(i u32, decl u32) {
 	if t.kind == .complex {
 		ct := vr.s.complex_types[t.idx]
 		if ct.abstract {
-			vr.find(i, .abstract_type, '<${vr.d.name(i)}> has an abstract type')
+			if vr.keep() {
+				vr.add(i, .abstract_type, '<${vr.d.name(i)}> has an abstract type')
+			}
 		}
 		if vr.d.text_len[i] != 0 && ct.content in [.element_only, .empty]
 			&& vr.d.text(i).trim_space() != '' {
-			vr.find(i, .text_not_allowed, '<${vr.d.name(i)}> has no text content')
+			if vr.keep() {
+				vr.add(i, .text_not_allowed, '<${vr.d.name(i)}> has no text content')
+			}
 		}
 	}
 	vr.check_attrs(i, t)
@@ -229,9 +253,11 @@ fn (mut vr Validator) check_text(i u32, p u32) {
 		return
 	}
 	t := vr.s.elements[vr.v.decl[p] - 1].typ
-	if t.kind == .complex && vr.s.complex_types[t.idx].content != .mixed
+	if t.kind == .complex && vr.s.complex_types[t.idx].content in [.element_only, .empty]
 		&& vr.d.text(i).trim_space() != '' {
-		vr.find(i, .text_not_allowed, 'text is not allowed in <${vr.d.name(p)}>')
+		if vr.keep() {
+			vr.add(i, .text_not_allowed, 'text is not allowed in <${vr.d.name(p)}>')
+		}
 	}
 }
 
@@ -252,20 +278,35 @@ fn (mut vr Validator) check_attrs(i u32, t TypeRef) {
 		if ns != flatxml.no_ns && ns == vr.xsi {
 			local := d.attr_local_name(a)
 			if local == 'nil' {
-				vr.find(i, .unsupported, 'xsi:nil on <${d.name(i)}> is not supported')
+				// no declaration is nillable (the reader refuses nillable), so only false is valid
+				if d.attr_value(a).trim_space() !in ['false', '0'] {
+					if vr.keep() {
+						vr.add(i, .not_nillable, '<${d.name(i)}> is not nillable, so xsi:nil must be false')
+					}
+				}
 			} else if local !in ['schemaLocation', 'noNamespaceSchemaLocation'] {
-				vr.find(i, .undeclared_attribute, 'attribute ${d.attr_name(a)} is not an XSD instance attribute')
+				if vr.keep() {
+					vr.add(i, .undeclared_attribute, 'attribute ${d.attr_name(a)} is not an XSD instance attribute')
+				}
 			}
 			continue
 		}
 		snm := vr.ns_map[ns]
 		sloc := vr.name_map[d.attr_local_id(a)]
 		key := if snm == no_match || sloc == no_match { u64(0) } else { QName{snm, sloc}.key() }
-		if isnil(idx) || key !in idx.attrs {
-			vr.find(i, .undeclared_attribute, 'attribute ${d.attr_name(a)} is not allowed on <${d.name(i)}>')
+		if isnil(idx) {
+			if vr.keep() {
+				vr.add(i, .undeclared_attribute, 'attribute ${d.attr_name(a)} is not allowed on <${d.name(i)}>')
+			}
 			continue
 		}
-		if idx.attrs[key].required {
+		use := idx.attrs[key] or {
+			if vr.keep() {
+				vr.add(i, .undeclared_attribute, 'attribute ${d.attr_name(a)} is not allowed on <${d.name(i)}>')
+			}
+			continue
+		}
+		if use.required {
 			seen++
 		}
 	}
@@ -289,7 +330,9 @@ fn (mut vr Validator) report_missing(i u32, idx &TypeIndex) {
 			}
 		}
 		if !found {
-			vr.find(i, .missing_attribute, '<${d.name(i)}> needs attribute ${vr.s.qname(name)}')
+			if vr.keep() {
+				vr.add(i, .missing_attribute, '<${d.name(i)}> needs attribute ${vr.s.qname(name)}')
+			}
 		}
 	}
 }
@@ -297,8 +340,8 @@ fn (mut vr Validator) report_missing(i u32, idx &TypeIndex) {
 // type_index is what complex type ct allows, gathered on first use: the element declarations in
 // its content model by name, and its attributes.
 fn (mut vr Validator) type_index(ct u32) &TypeIndex {
-	if idx := vr.index[ct] {
-		return idx
+	if !isnil(vr.index[ct]) {
+		return vr.index[ct]
 	}
 	mut idx := &TypeIndex{}
 	vr.collect(vr.s.complex_types[ct].particle, mut idx)
@@ -331,13 +374,16 @@ fn (vr &Validator) collect(p u32, mut idx TypeIndex) {
 	}
 }
 
-fn (mut vr Validator) find(i u32, kind FindingKind, msg string) {
+// keep counts a finding and says whether it is kept, so a message is only written for one that is.
+fn (mut vr Validator) keep() bool {
 	vr.v.total++
-	if vr.v.findings.len < vr.opts.max_findings {
-		vr.v.findings << Finding{
-			node: i
-			kind: kind
-			msg:  msg
-		}
+	return vr.v.findings.len < vr.opts.max_findings
+}
+
+fn (mut vr Validator) add(i u32, kind FindingKind, msg string) {
+	vr.v.findings << Finding{
+		node: i
+		kind: kind
+		msg:  msg
 	}
 }
