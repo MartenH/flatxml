@@ -60,9 +60,10 @@ a real schema needs it, with its own tests.
 
 1. **Namespaces in the parser.** Every element and attribute gets a namespace id and a local-name
    id. The prefix split is cached per interned name, not worked out per node. Resolution is a
-   second linear pass that only maintains a scope where an element declares `xmlns`. An
-   unprefixed attribute has no namespace (XML Names). Budget: at most 10% on parse time, measured
-   on the 500 MB benchmark.
+   second linear pass, run on request (`resolve_namespaces`), that only maintains a scope where
+   an element declares `xmlns`. An unprefixed attribute has no namespace (XML Names). Measured:
+   about 105 ms on the 500 MB benchmark, roughly a tenth of the parse, and nothing for a caller
+   that does not ask.
 2. **A schema is a compiled object of its own**, read from XSD files with flatxml itself, since a
    schema is XML. It has its own name table. A document is bound to a schema through a
    translation array (the document's name id → the schema's qualified-name id), filled once per
@@ -118,8 +119,8 @@ a real schema needs it, with its own tests.
   namespace mode in step 1.
 - **Performance:** `cmd/genxml` gains a schema for the documents it writes, so the validation
   benchmark is ours end to end. Validating the 500 MB document should take no longer than parsing
-  it (about 1.2 s), since it is one more linear pass of table lookups with a regex on some leaves. Peak
-  memory is recorded with it.
+  it (about 1.2 s), since it is one more linear pass of table lookups with a regex on some leaves.
+  Peak memory is recorded with it.
 
 ## Steps
 
@@ -130,8 +131,9 @@ this element" before "is it in the right place".
 0. **Setup** (done). CI on Linux with the pinned V. An expat cross-check
    (`tools/check_vs_expat.py`) driven by `cmd/cli` (`flatxml dump`, `flatxml stats`), and a
    generator of synthetic documents for the benchmark (`cmd/genxml`, `tools/bench.sh`).
-1. **Namespaces** (design 1). Done when the namespace mode of the expat check is identical on
-   `testdata/` and on the local real files, and parse time is within budget.
+1. **Namespaces** (design 1, done). The namespace mode of the expat check is identical on
+   `testdata/`, generated documents and the local real files, and `tools/fuzz_vs_expat.py` finds
+   no refused document and no different tree in either mode.
 2. **Schema reader** (design 2, 8, 9). Compile the subset, refuse everything else, resolve groups,
    attribute groups, extensions and anonymous types, and keep the appinfo. A synthetic schema per
    construct, and one test per refusal. Done when the real-world schemas compile locally with

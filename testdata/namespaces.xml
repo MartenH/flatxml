@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Namespace scoping: defaults, prefixes, redeclaration, undeclaring the default, reserved
+     prefixes, and attributes, which take no default namespace. -->
+<doc xmlns="urn:example:a" xmlns:b="urn:example:b" version="1" xml:lang="en">
+  <item b:kind="x" kind="y">one</item>
+  <b:item>two</b:item>
+  <inner xmlns="urn:example:c" xmlns:b="urn:example:b2">
+    <item b:kind="z">three</item>
+    <b:item>four</b:item>
+    <plain xmlns="">
+      <leaf b:k="1" k="2"/>
+    </plain>
+  </inner>
+  <item>back in a</item>
+  <b:item b:xmlns="not a declaration" xml:space="preserve">five</b:item>
+  <redecl xmlns:xml="http://www.w3.org/XML/1998/namespace" xmlns:e="urn:example:&amp;e">
+    <e:item e:a="&lt;1&gt;">six</e:item>
+  </redecl>
+  <same xmlns:p="urn:example:same" xmlns:q="urn:example:other" p:k="1" q:k="2"/>
+</doc>

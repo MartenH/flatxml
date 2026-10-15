@@ -52,7 +52,8 @@ fn (mut d Doc) grow_names() {
 	}
 }
 
-// name_id is the id of an element or attribute name, if the document uses it.
+// name_id is the id of an element or attribute name, if the document uses it. Once namespaces
+// are resolved, prefixes and local names have ids too (`local_id`), and so do `xml` and `xmlns`.
 pub fn (d &Doc) name_id(name string) ?u32 {
 	h := hash.wyhash_c(name.str, u64(name.len), name_seed)
 	mask := u64(d.name_slots.len - 1)

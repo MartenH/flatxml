@@ -1,8 +1,9 @@
 // flatxml — command-line access to the parser.
 //
-//   flatxml dump <file>            one line per element and per run of text, for
-//                                  tools/check_vs_expat.py
-//   flatxml stats <file>...        parse each file and print its size, node counts and parse time
+//   flatxml dump [--ns] <file>     one line per element and per run of text, for
+//                                  tools/check_vs_expat.py; --ns resolves namespaces
+//   flatxml stats <file>...        parse each file and print its size, node counts and parse time,
+//                                  and the time namespace resolution adds
 module main
 
 import flatxml
@@ -11,8 +12,9 @@ import strings
 import time
 
 const usage = 'usage:
-  flatxml dump <file>           canonical element/text stream, for tools/check_vs_expat.py
-  flatxml stats <file>...       size, node counts and parse time of each file'
+  flatxml dump [--ns] <file>    canonical element/text stream, for tools/check_vs_expat.py;
+                                --ns names elements and attributes {uri}local
+  flatxml stats <file>...       size, node counts, parse and namespace times of each file'
 
 fn main() {
 	args := os.args[1..]
@@ -22,11 +24,12 @@ fn main() {
 	}
 	match args[0] {
 		'dump' {
-			if args.len != 2 {
+			ns := args[1] == '--ns'
+			if args.len != (if ns { 3 } else { 2 }) {
 				eprintln(usage)
 				exit(2)
 			}
-			dump_events(args[1])
+			dump_events(args[args.len - 1], ns)
 		}
 		'stats' {
 			mut failed := false
@@ -58,15 +61,29 @@ fn print_stats(path string) ! {
 	println('  ${mb(d.src_len)}, parsed in ${ms(took)} ${rate(d.src_len, took)}')
 	println('  ${d.len() - 1 - texts} elements, ${texts} text nodes, ${d.attr_tag.len} attributes, ${d.names.len - 2} distinct names')
 	println('  node arrays ${mb(used)} used, ${mb(reserved)} reserved')
+	ns_sw := time.new_stopwatch()
+	if _ := d.resolve_namespaces() {
+		ns_took := ns_sw.elapsed()
+		println('  namespaces resolved in ${ms(ns_took)} (${f64(ns_took) * 100 / f64(took):.1f}% of the parse), ${d.ns_uris.len - 3} declared')
+	} else {
+		println('  namespaces: ${err}')
+	}
 	d.free()
 }
 
 // dump_events writes `E depth name attr=value...` per element and `T depth text` per run of text,
-// the text decoded and trimmed, and empty runs left out; depth is the containing element's.
-fn dump_events(path string) {
-	d := flatxml.parse_file(path) or {
+// the text decoded and trimmed, and empty runs left out; depth is the containing element's. With
+// ns, names are `{uri}local` (or `local` in no namespace) and namespace declarations are left out.
+fn dump_events(path string, ns bool) {
+	mut d := flatxml.parse_file(path) or {
 		eprintln(err)
 		exit(1)
+	}
+	if ns {
+		d.resolve_namespaces() or {
+			eprintln(err)
+			exit(1)
+		}
 	}
 	mut out := os.stdout()
 	mut sb := strings.new_builder(1 << 20)
@@ -89,10 +106,19 @@ fn dump_events(path string) {
 		if run.len > 0 {
 			flush_run(mut sb, mut run, depth[run_parent])
 		}
-		sb.write_string('E ${depth[k]} ${d.name(i)}')
+		if ns {
+			sb.write_string('E ${depth[k]} ${expanded(d.ns_uri(d.ns_of(i)), d.local_name(i))}')
+		} else {
+			sb.write_string('E ${depth[k]} ${d.name(i)}')
+		}
 		lo, hi := d.attr_range(i)
 		for a := lo; a < hi; a++ {
-			sb.write_string(' ${d.attr_name(a)}=${esc(d.attr_value(a))}')
+			if !ns {
+				sb.write_string(' ${d.attr_name(a)}=${esc(d.attr_value(a))}')
+			} else if !d.is_ns_decl(a) {
+				name := expanded(d.ns_uri(d.attr_ns_of(a)), d.attr_local_name(a))
+				sb.write_string(' ${name}=${esc(d.attr_value(a))}')
+			}
 		}
 		sb.write_u8(`\n`)
 		if d.text_len[i] != 0 {
@@ -115,6 +141,10 @@ fn write_or_exit(mut out os.File, s string) {
 		eprintln('flatxml: ${err}')
 		exit(1)
 	}
+}
+
+fn expanded(uri string, local string) string {
+	return if uri == '' { local } else { '{${uri}}${local}' }
 }
 
 fn flush_run(mut sb strings.Builder, mut run strings.Builder, depth u32) {

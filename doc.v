@@ -47,12 +47,22 @@ pub mut:
 	attr_len []u32
 	// Interned names: id -> name.
 	names []string
+	// Namespaces, filled by `resolve_namespaces`: each node's namespace id (0 for a text node and
+	// for an element in no namespace), each attribute's, and the URI of each id.
+	ns      []u32
+	attr_ns []u32
+	ns_uris []string
 mut:
 	name_hash  []u64 // id -> hash of the name
 	name_slots []u32 // open-addressing table of ids; 0 marks an empty slot
 	mapped     bool
 	keep_bytes []u8   // owns the source when it came from parse_bytes
 	keep_str   string // ... or from parse_string
+	// Filled by `resolve_namespaces`: name id -> prefix name id (0 when none, `not_qname` when the
+	// name is not a qualified name) and local-name id, and URI -> namespace id.
+	name_prefix []u32
+	name_local  []u32
+	ns_ids      map[string]u32
 }
 
 // parse_file maps the file at path and parses it.
@@ -122,6 +132,12 @@ pub fn (mut d Doc) free() {
 		d.attr_len.free()
 		d.name_hash.free()
 		d.name_slots.free()
+		d.ns.free()
+		d.attr_ns.free()
+		d.name_prefix.free()
+		d.name_local.free()
+		d.ns_uris.free()
+		d.ns_ids.free()
 	}
 }
 
