@@ -152,7 +152,7 @@ each is good at, and what it is not:
   28 bytes a node, with every name interned and text left in the file until it is read, and
   validates against a schema in a fraction of the parse. Namespaces and XSD validation are layers
   over that tree, each opt-in. It is not good at: changing a document (the tree is read-only;
-  editing is a later layer), documents that do not fit in memory or exceed 4 GiB (it maps the
+  editing is a planned layer, [docs/documents.md](docs/documents.md)), documents that do not fit in memory or exceed 4 GiB (it maps the
   whole file; there is no streaming mode), XML 1.1, DTDs (skipped), and names and UTF-8 (not
   checked). Its XSD support is a measured subset. It is a V library.
 - **quick-xml** (Rust) is a pull parser: it hands out events and keeps no tree, so it streams a
