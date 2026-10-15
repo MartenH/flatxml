@@ -21,6 +21,16 @@
 //                                  Exits 0 when they are the same, 1 when they differ, 2 on trouble
 //   flatxml edit <in> <out|-> <script|->   apply a script of edits (see `edit_doc`) to a
 //                                  document and write it, every byte no edit touched kept
+//   flatxml apply [--rules <file>] [--ns] [--jobs N] [--ext EXT] [--check] <OLD> <NEW> <OUT>
+//   flatxml apply ... --in-place <OLD> <NEW>   the diff from OLD to NEW (as `diff` makes it),
+//                                  applied to OLD's files and written to OUT: a file for a file,
+//                                  a directory for a set, each document at its place relative to
+//                                  OLD (unchanged ones copied), or over OLD's own files. A new
+//                                  element goes to the file of OLD named like the NEW file it
+//                                  comes from, where its parent has a fragment there. --check
+//                                  reads what was written and diffs it against NEW. Exits 0 when
+//                                  it applied (and checked), 1 when the check finds a change, 2
+//                                  on trouble
 //   flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups]
 //                 <file|dir>...    read many files as one set and merge them by the rules
 //                                  (`flatxml.parse_rules`): the merged view's size, its time,
@@ -54,6 +64,9 @@ const usage = 'usage:
   flatxml write [--nodes|--rewrite] <in> <out|->   write a document back as XML
   flatxml roundtrip [--nodes|--rewrite] [--ext EXT] <file|dir>...   write and compare each
   flatxml edit <in> <out|-> <script|->   apply a script of edits and write the document
+  flatxml apply [--rules <file>] [--ns] [--jobs N] [--ext EXT] [--check] <OLD> <NEW> <OUT>
+  flatxml apply [...] --in-place <OLD> <NEW>
+                                the diff from OLD to NEW applied to the files of OLD, written to OUT
   flatxml merge --rules <file> [--ns] [--jobs N] [--ext EXT] [--problems N] [--lookups] <file|dir>...
                                 many files merged by rules: the view, its time, the problems
   flatxml diff [--rules <file>] [--ns] [--jobs N] [--ext EXT] [--brief] <A> <B>
@@ -135,6 +148,9 @@ fn main() {
 		}
 		'diff' {
 			diff_sets(args[1..])
+		}
+		'apply' {
+			apply_sets(args[1..])
 		}
 		'stats' {
 			parse_only := args[1] == '--parse-only'
@@ -504,6 +520,8 @@ mut:
 	problems int = 10 // merge: how many problems to print
 	lookups  bool // merge: time looking every node up
 	brief    bool // diff: the counts only
+	check    bool // apply: read what was written and diff it against the new version
+	in_place bool // apply: write the edited files over the old ones
 }
 
 // set_flags are the flags each command that reads a set takes.
@@ -511,6 +529,7 @@ const set_flags = {
 	'set':   ['--ns', '--jobs', '--ext']
 	'merge': ['--ns', '--jobs', '--ext', '--rules', '--problems', '--lookups']
 	'diff':  ['--ns', '--jobs', '--ext', '--rules', '--brief']
+	'apply': ['--ns', '--jobs', '--ext', '--rules', '--check', '--in-place']
 }
 
 // read_set_args reads the arguments of `set`, `merge` or `diff` (cmd), and exits with the usage on
@@ -557,6 +576,12 @@ fn read_set_args(args []string, cmd string) SetArgs {
 			}
 			'--brief' {
 				a.brief = true
+			}
+			'--check' {
+				a.check = true
+			}
+			'--in-place' {
+				a.in_place = true
 			}
 			else {
 				a.paths << args[k]
@@ -849,6 +874,41 @@ fn time_lookups(m &flatxml.Merged) {
 	println('lookups: ${found} of ${paths.len} key paths in ${ms(by_path)}, ${found_named} children by name and key in ${ms(by_name)}')
 }
 
+// read_rules is the rules file named, read; none when none is named. It exits 2 when it cannot.
+fn (a &SetArgs) read_rules() flatxml.RuleSet {
+	if a.rules == '' {
+		return flatxml.RuleSet{}
+	}
+	return flatxml.parse_rules(os.read_file(a.rules) or {
+		eprintln(err)
+		exit(2)
+	}) or {
+		eprintln('${a.rules}: ${err}')
+		exit(2)
+	}
+}
+
+// read_view reads the files operand p names as one set and merges it by the rules, saying how
+// many problems the rules find. It exits 2 when a file cannot be read.
+fn (a &SetArgs) read_view(p string, rules flatxml.RuleSet, cmd string) &flatxml.Merged {
+	mut s := flatxml.DocSet.new()
+	errs := s.load(a.files_of(p), jobs: a.jobs, namespaces: a.ns)
+	for e in errs {
+		eprintln('flatxml ${cmd}: ${one_line(e.msg)}')
+	}
+	if errs.len > 0 {
+		exit(2)
+	}
+	v := s.merge(rules) or {
+		eprintln(err)
+		exit(2)
+	}
+	if v.problems.len > 0 {
+		eprintln('flatxml ${cmd}: ${p}: the rules find ${v.problems.len} problems (see flatxml merge)')
+	}
+	return v
+}
+
 // diff_sets reads two sets, merges each by the rules (none: each as written), and prints the
 // changes from the first to the second and their counts. It exits 0 when there are none, 1 when
 // there are, and 2 when a file or the rules cannot be read.
@@ -858,37 +918,9 @@ fn diff_sets(args []string) {
 		eprintln(usage)
 		exit(2)
 	}
-	rules := if a.rules == '' {
-		flatxml.RuleSet{}
-	} else {
-		flatxml.parse_rules(os.read_file(a.rules) or {
-			eprintln(err)
-			exit(2)
-		}) or {
-			eprintln('${a.rules}: ${err}')
-			exit(2)
-		}
-	}
+	rules := a.read_rules()
 	sw := time.new_stopwatch()
-	mut views := []&flatxml.Merged{}
-	for p in a.paths {
-		mut s := flatxml.DocSet.new()
-		errs := s.load(a.files_of(p), jobs: a.jobs, namespaces: a.ns)
-		for e in errs {
-			eprintln('flatxml diff: ${one_line(e.msg)}')
-		}
-		if errs.len > 0 {
-			exit(2)
-		}
-		v := s.merge(rules) or {
-			eprintln(err)
-			exit(2)
-		}
-		if v.problems.len > 0 {
-			eprintln('flatxml diff: ${p}: the rules find ${v.problems.len} problems (see flatxml merge)')
-		}
-		views << v
-	}
+	views := [a.read_view(a.paths[0], rules, 'diff'), a.read_view(a.paths[1], rules, 'diff')]
 	read := sw.elapsed()
 	mut d := flatxml.diff(views[0], views[1])
 	compared := sw.elapsed() - read
@@ -1067,4 +1099,82 @@ fn unescape_field(s string) string {
 		k++
 	}
 	return sb.str()
+}
+
+// operand_root is the directory an operand's files are named relative to: a directory itself, a
+// list's directory, or a file's.
+fn operand_root(p string) string {
+	if p.starts_with('@') {
+		return os.dir(p[1..])
+	}
+	return if os.is_dir(p) { p } else { os.dir(p) }
+}
+
+// relative_to is path relative to root where it is below it, else its base name.
+fn relative_to(path string, root string) string {
+	r := os.real_path(root)
+	f := os.real_path(path)
+	prefix := r + os.path_separator
+	return if f.starts_with(prefix) { f[prefix.len..] } else { os.base(f) }
+}
+
+// apply_sets reads OLD and NEW, diffs them as `diff` does, applies the diff to OLD's files, and
+// writes them to OUT (or over OLD's files with --in-place), then, with --check, reads them back
+// and diffs them against NEW.
+fn apply_sets(args []string) {
+	a := read_set_args(args, 'apply')
+	if a.paths.len != if a.in_place { 2 } else { 3 } {
+		eprintln(usage)
+		exit(2)
+	}
+	rules := a.read_rules()
+	sw := time.new_stopwatch()
+	old := a.read_view(a.paths[0], rules, 'apply')
+	new := a.read_view(a.paths[1], rules, 'apply')
+	read := sw.elapsed()
+	d := flatxml.diff(old, new)
+	compared := sw.elapsed() - read
+	// a new element goes to the file of OLD named like the file of NEW it comes from
+	old_root, new_root := operand_root(a.paths[0]), operand_root(a.paths[1])
+	mut by_name := map[string]int{}
+	for k, doc in old.set.docs {
+		by_name[relative_to(doc.path, old_root)] = k
+	}
+	into := fn [by_name, new_root] (f flatxml.Node, p flatxml.MNode) int {
+		return by_name[relative_to(f.doc.path, new_root)] or { -1 }
+	}
+	mut me := d.apply(into: into) or {
+		eprintln('flatxml ${err}')
+		exit(2)
+	}
+	applied := sw.elapsed() - read - compared
+	mut out := ''
+	if a.in_place {
+		me.write_files() or {
+			eprintln('flatxml apply: ${err}')
+			exit(2)
+		}
+	} else {
+		out = a.paths[2]
+		single := old.set.docs.len == 1 && !os.is_dir(a.paths[0]) && !a.paths[0].starts_with('@')
+		me.write_to(fn [out, old_root, single] (doc &flatxml.Doc) string {
+			return if single { out } else { os.join_path(out, relative_to(doc.path, old_root)) }
+		}) or {
+			eprintln('flatxml apply: ${err}')
+			exit(2)
+		}
+	}
+	println('${d.changes.len} changes applied to ${me.edited().len} of ${old.set.docs.len} files (read and merged in ${ms(read)}, compared in ${ms(compared)}, applied in ${ms(applied)})')
+	if !a.check {
+		return
+	}
+	written := if a.in_place { a.paths[0] } else { out }
+	back := a.read_view(written, rules, 'apply')
+	again := flatxml.diff(back, new)
+	if again.equal() {
+		println('checked: ${written} and ${a.paths[1]} have no changes')
+		return
+	}
+	println('checked: ${written} and ${a.paths[1]} still differ in ${again.changes.len} changes')
+	exit(1)
 }

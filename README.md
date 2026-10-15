@@ -169,7 +169,9 @@ and an inserted one gets its neighbours'. An element moved or copied keeps the n
 it was read: where they differ at its new place, it is given the declarations that restore them,
 `xmlns=""` included. A fragment is read in the namespaces in scope where it is first put, and
 refused if a prefix it uses is bound neither there nor in it. `flatxml edit` applies a script of
-edits from the command line.
+edits from the command line. A merged view is edited the same way (`Merged.edit`): a value in
+every file that holds it, structure in the file the caller names, each changed file written back
+to its own path; and a diff is applied to its old view so (`Diff.apply`, `flatxml apply`).
 
 ```v
 import flatxml
@@ -455,6 +457,7 @@ tools/bench.sh 500                             # against ElementTree and lxml
 tools/compare/run.sh <file>                    # against quick-xml, pugixml, lxml, ElementTree
 bin/flatxml merge --rules rules.txt parts/      # many files read as one by rules: size, time, problems
 bin/flatxml diff [--rules rules.txt] old/ new/  # what changed: removed, added, moved, texts, attributes
+bin/flatxml apply --check old/ new/ out/       # that diff applied to old's files, written to out/
 tools/diff_vs_edits.py bin/flatxml *.xml       # known edits, each reported as exactly that change
 bin/flatxml schema model.xsd                   # compile a schema, print what it holds
 bin/flatxml validate model.xsd model.xml       # check a document against it

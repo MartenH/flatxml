@@ -106,7 +106,9 @@ annotations are kept for that), but none is needed.
    changed, naming the node in each view (every fragment of it, so every file and line).
    Text compared is a node's own text, run by run (`text_runs`: beside child elements, each run
    with the number of children before it; a child's text is the child's), so text that moves
-   among the children is a change. Names are compared as written.
+   among the children is a change. Names are compared as written, or, where every document of
+   both views has its namespaces resolved, by namespace and local name (and declarations are
+   then not attributes).
 
    A change carries what applying it needs: an added or moved node names the node of the old
    view it goes under and its index among the new parent's children. Applied to the old view,
@@ -133,13 +135,21 @@ annotations are kept for that), but none is needed.
    first (in the set's order, then document order), and what it leaves out is in the problem,
    every contribution of it; a caller for whom a problem is an error refuses the view when
    there is one.
-6. **Edits.** An edit set over a document or a merged view: set text, set or remove an attribute,
-   insert an element (written as a fragment, or copied from any node), remove one, move one. Kept
-   as changes keyed by node, so the tree's arrays are never rewritten, and read through: an
-   edited view answers like a document. An edit on a merged view lands in the files it came
-   from: a value held in several files changes in each, and a new element goes to the file the
-   caller names, so a model kept in many files stays in many files. A three-way merge is two diffs from a common base,
-   applied together where they change different nodes and reported where they change the same.
+6. **Edits** (built). An edit set over a document (`Doc.edit`) or a merged view (`Merged.edit`):
+   set text, set or remove an attribute, insert an element (written as a fragment, or copied from
+   any node), remove one, move one. Kept as changes keyed by node, so the tree's arrays are never
+   rewritten, and read through: an edited view answers like a document. Edits on a merged view are
+   edit sets on the documents its nodes come from, one per document, made when first needed: a
+   value is set in every fragment, a removed node is removed from every document that holds part
+   of it, and structure is edited in the document the caller names (`MEdit.fragment`, then that
+   document's edit set), so a model kept in many files stays in many files; written, each changed
+   document goes back to its own path. A diff is applied to its old view this way (`Diff.apply`):
+   an added element, or one moved to where its parent has no fragment in the moved one's document,
+   goes to the document `into` names, else to that of its nearest new sibling of its own
+   aggregation, after the nearest sibling before it there; a value changes in the fragments that
+   hold the old one, and a value the node did not have goes to one fragment, as an element would.
+   A three-way merge is two diffs from a common base, applied together where they change different
+   nodes and reported where they change the same.
 7. **Writing.** A document, an edited document (each changed file of a set, back to its own
    path) or a merged view (as one document) is written as XML: unchanged
    subtrees as their original bytes, changed ones serialised with the escaping their place needs
@@ -248,17 +258,26 @@ Round trips, which need no oracle:
    lxml's differs in 1,015,501. An edited 500 MB document writes in the time an unedited one does
    (0.66–0.83 s against 0.70–0.87 s to a file).
 
-   Applying a diff (`flatxml apply`, next) is a thin layer on this, and a test does it
-   (`apply_diff` in `edit_test.v`): a removed node is `remove`d, a moved one `remove`d and later
-   `place`d, an added one `insert_copy`d from the new document, at its index, lowest first, and
-   then texts (`set_text_runs`, run by run in their slots among the children) and attributes set.
-   One rule comes with it: a diff places text by slot and reports a text change only where the runs
-   differ, so an element whose children change (a child removed, added, or moved out or in) must
-   have its runs set again at their old slots, unless it has a text change of its own. Diffs
-   between 18,000 random documents and random edits of them (six seeds), applied this way, give the
-   new document (as a diff compares it). Edits on a merged view are edit sets on the documents its
-   nodes come from, one per document: a value held in several is set in each, and a new element
-   goes to the document the caller names.
+   Applying a diff, and edits on a merged view (design 6, done), and `flatxml apply OLD NEW OUT`:
+   the diff from OLD to NEW applied to OLD's files and written to OUT (a file, or a directory with
+   each document at its place; `--in-place` over OLD's files), a new element going to the file of
+   OLD named like the file of NEW it comes from; `--check` reads OUT back and diffs it against
+   NEW. A removed node is `remove`d, a moved one `remove`d and later `place`d (or, where it must
+   change document, the new view's node copied), an added one `insert_copy`d from the new view, at
+   its index, lowest first, and then texts (run by run in their slots among the children) and
+   attributes set. One rule comes with it: a diff places text by slot and reports a text change
+   only where the runs differ, so an element whose children change has its runs set again at their
+   old slots, where they moved, unless it has a text change of its own. Verified: diffs between
+   300 random documents with namespaces and random edits of them, applied, give the new document,
+   compared by namespace; 300 random sets of one to four files, each a model split by its keys, a
+   diff between each and its model after one to five random edits applied to the files (744
+   changes, 466 files edited), read back and merged, have no change from the model, and every one
+   of the 272 files no edit reached is written byte for byte as it was. On the real-world files:
+   the two versions of 108 files (4 files differ) apply in 1.5–3 ms to those 4 files, with or
+   without rules, and the result has no change from the newer version (the bytes left different
+   are comments); the 560 files against a copy with 267 texts changed apply to the 54 files
+   changed, or, with the rules, 61: identical definitions kept in two directories are one merged
+   node, so a value changed in one copy changes in both.
 6. **Three-way merge**: two changed versions of one base.
 
 ## Techniques taken from other tools

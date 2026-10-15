@@ -205,7 +205,7 @@ fn tn_of(n MNode, mut idx map[u32]&TN) &TN {
 
 // apply makes the old view's tree into the new one's with the changes, as the comment at the top
 // of diff.v says.
-fn apply(d Diff) &TN {
+fn apply_model(d Diff) &TN {
 	mut idx := map[u32]&TN{}
 	mut root := tn_of(d.old.root(), mut idx)
 	for c in d.changes {
@@ -396,7 +396,7 @@ fn test_a_diff_applied_to_the_old_document_gives_the_new_one() {
 			d := diff_docs(doc_of('a.xml', a.xml()), doc_of('b.xml', b.xml()), RuleSet{},
 				max_d: max_d
 			) or { panic(err) }
-			got := apply(d)
+			got := apply_model(d)
 			// the new document as read: text runs written side by side read as one
 			mut nidx := map[u32]&TN{}
 			want := tn_of(d.new.root(), mut nidx)

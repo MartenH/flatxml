@@ -651,66 +651,10 @@ fn test_set_text_runs() {
 	assert e.root().text_runs() == [TextRun{0, 'a'}, TextRun{2, 'c'}]
 }
 
-// apply_diff makes the changes of diff, from the document e edits to another, as the diff says to:
-// removals and moves lifted out, then added and moved nodes put in at their places, lowest first,
-// then texts and attributes. A diff places text by slot (after so many child elements) and reports
-// a text change only where the runs differ, so an element whose children change (a child
-// removed, added or moved out or in) must have its runs set again at their old slots, unless it
-// has a text change of its own.
-fn apply_diff(mut e Edit, diff Diff) ! {
-	at := fn [e] (n MNode) ENode {
-		return e.node(n.fragment(0).i)
-	}
-	mut slots := map[u64][]TextRun{}
-	for c in diff.changes {
-		if c.kind in [.removed, .moved] {
-			p := at(c.old.parent())
-			slots[p.key] = p.text_runs()
-		}
-		if c.kind in [.added, .moved] {
-			p := at(c.parent)
-			slots[p.key] = p.text_runs()
-		}
-	}
-	for c in diff.changes {
-		if c.kind == .text {
-			slots.delete(at(c.old).key)
-		}
-	}
-	for c in diff.changes {
-		if c.kind in [.removed, .moved] {
-			e.remove(at(c.old))!
-		}
-	}
-	mut ins := diff.changes.filter(it.kind in [.added, .moved])
-	ins.sort(a.index < b.index)
-	for c in ins {
-		if c.kind == .added {
-			e.insert_copy(at(c.parent), c.index, c.new.fragment(0))!
-		} else {
-			e.place(at(c.old), at(c.parent), c.index)!
-		}
-	}
-	for k, runs in slots {
-		e.set_text_runs(ENode{e, k}, runs)!
-	}
-	for c in diff.changes {
-		if c.kind == .text {
-			e.set_text_runs(at(c.old), c.runs)!
-		} else if c.kind == .attr {
-			if v := c.after {
-				e.set_attr(at(c.old), c.name, v)!
-			} else {
-				e.remove_attr(at(c.old), c.name)!
-			}
-		}
-	}
-}
-
-// diff_shape writes a tree as one line, as a diff compares it: names as written, attributes in
-// any order, and the own text at each slot among the children (the runs of one slot joined: a
-// comment between two is not kept). Not namespaces: a diff matches elements by their names as
-// written, so it may move one where another of that name was, and a moved element keeps its own.
+// diff_shape writes a tree as one line, as a diff of documents with their namespaces resolved
+// compares it: names by namespace and local name, attributes in any order (declarations left
+// out), and the own text at each slot among the children (the runs of one slot joined: a comment
+// between two is not kept).
 fn diff_shape(d &Doc, i u32) string {
 	mut slots := map[int]string{}
 	for r in d.node(i).text_runs() {
@@ -719,12 +663,12 @@ fn diff_shape(d &Doc, i u32) string {
 	mut attrs := []string{}
 	lo, hi := d.attr_range(i)
 	for a := lo; a < hi; a++ {
-		if !is_ns_decl_name(d.attr_name(a)) {
-			attrs << '${d.attr_name(a)}=${d.attr_value(a)}'
+		if !d.is_ns_decl(a) {
+			attrs << '{${d.ns_uri(d.attr_ns_of(a))}}${d.attr_local_name(a)}=${d.attr_value(a)}'
 		}
 	}
 	attrs.sort()
-	mut s := '${d.name(i)}${attrs}${slots}'
+	mut s := '{${d.ns_uri(d.ns_of(i))}}${d.local_name(i)}${attrs}${slots}'
 	for c in d.node(i).children() {
 		s += diff_shape(d, c.i)
 	}
@@ -753,8 +697,7 @@ fn test_a_diff_applied_by_an_edit_set_gives_the_new_document() {
 		if diff.changes.any(it.kind == .added && !it.parent.ok()) {
 			continue // the root replaced
 		}
-		mut e := a.edit()
-		apply_diff(mut e, diff)!
+		e := apply(diff, a)!
 		out := e.xml()
 		mut w := doc_of(out)
 		w.resolve_namespaces()!

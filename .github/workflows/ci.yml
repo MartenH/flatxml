@@ -57,6 +57,9 @@ jobs:
           bin/flatxml roundtrip "$RUNNER_TEMP/edited.xml"
           if printf 'insert\t/abc\t0\t<z/>\n' | bin/flatxml edit testdata/tricky.xml - -; then exit 1; fi
 
+      - name: A diff applied gives the new document
+        run: bin/flatxml apply --check testdata/tricky.xml "$RUNNER_TEMP/edited.xml" "$RUNNER_TEMP/applied.xml"
+
       - name: A generated document is valid against its schema
         run: bin/flatxml validate testdata/inventory.xsd "$RUNNER_TEMP/gen_8.xml"
 
