@@ -170,7 +170,9 @@ fn test_write_file_replaces_its_own_source() {
 	d.free()
 	assert os.read_file(path) or { '' } == src
 	assert os.read_file(other) or { '' } == src
-	assert (os.stat(path) or { panic(err) }).mode & 0o777 == 0o600
+	$if !windows {
+		assert (os.stat(path) or { panic(err) }).mode & 0o777 == 0o600
+	}
 	assert os.ls(os.dir(path)) or { [] }.filter(it.starts_with(os.file_name(path)) && it.ends_with('.tmp')) == []
 	// a new file gets the mode any new file gets
 	plain := path + '.plain'
@@ -178,10 +180,38 @@ fn test_write_file_replaces_its_own_source() {
 	defer {
 		os.rm(plain) or {}
 	}
-	assert (os.stat(other) or { panic(err) }).mode & 0o7777 == (os.stat(plain) or { panic(err) }).mode & 0o7777
+	$if !windows {
+		assert (os.stat(other) or { panic(err) }).mode & 0o7777 == (os.stat(plain) or { panic(err) }).mode & 0o7777
+	}
+}
+
+// Windows: a replaced file keeps its attributes (ReplaceFileW), and a read-only one is refused
+// rather than replaced.
+fn test_write_file_refuses_a_read_only_file_on_windows() {
+	$if !windows {
+		return
+	}
+	path := os.join_path(os.temp_dir(), 'flatxml_ro_${os.getpid()}.xml')
+	os.write_file(path, '<a/>') or { panic(err) }
+	defer {
+		os.chmod(path, 0o666) or {}
+		os.rm(path) or {}
+	}
+	os.chmod(path, 0o444) or { panic(err) }
+	d := parsed('<b/>')
+	d.write_file(path) or {
+		assert err.msg().contains('read-only')
+		assert os.read_file(path) or { '' } == '<a/>'
+		return
+	}
+	assert false, 'replaced a read-only file'
 }
 
 fn test_write_file_through_a_link_writes_its_target() {
+	$if windows {
+		// a symbolic link needs a privilege a Windows account does not have by default
+		return
+	}
 	dir := os.join_path(os.temp_dir(), 'flatxml_link_${os.getpid()}')
 	os.mkdir_all(dir) or { panic(err) }
 	defer {
