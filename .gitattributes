@@ -1,0 +1,4 @@
+# Every file is checked out byte for byte as committed, on every platform: the test data is
+# compared byte for byte, and string literals spanning lines in the tests carry the line endings
+# of their source file.
+* -text
