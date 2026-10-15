@@ -273,7 +273,7 @@ Round trips, which need no oracle:
    diff between each and its model after one to five random edits applied to the files (744
    changes, 466 files edited), read back and merged, have no change from the model, and every one
    of the 272 files no edit reached is written byte for byte as it was. On the real-world files:
-   the two versions of 108 files (4 files differ) apply in 1.5–3 ms to those 4 files, with or
+   the two versions of 108 files (4 files differ) apply in 3–4 ms to those 4 files, with or
    without rules, and the result has no change from the newer version (the bytes left different
    are comments); the 560 files against a copy with 267 texts changed apply to the 54 files
    changed, or, with the rules, 61: identical definitions kept in two directories are one merged
