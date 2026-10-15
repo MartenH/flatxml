@@ -89,7 +89,8 @@ a real schema needs it, with its own tests.
    - an undeclared attribute, or a required attribute missing;
    - a value outside its enumeration, not matching its pattern, too long, or not of its base type;
    - text in element-only content;
-   - `xsi:type` or `xsi:nil`, which are reported as not supported rather than ignored.
+   - `xsi:type`, which is reported as not supported rather than ignored, and `xsi:nil="true"`,
+     an error while no declaration can be nillable.
 7. **Values.** `Typed` reads a value by its built-in base type (`xsd:double` → `f64`,
    `xsd:unsignedInt` → `u32`, `xsd:string` → `string`). It also exposes which simple type the
    element has, so a consumer can attach its own decoder to a derived type. flatxml does not guess
@@ -149,7 +150,7 @@ this element" before "is it in the right place".
    this already answers "is this element allowed here", and "what kind of element is this".
    On the W3C suite no valid document is reported (6,461 instance tests); 2,678 invalid ones pass
    because their error is in a value or the order of children. 463 real-world files agree with
-   libxml2 on every verdict. About 0.5 s on the 500 MB benchmark, namespaces included.
+   libxml2 on every verdict. About 0.34 s on the 500 MB benchmark, namespaces included.
 4. **Simple types** (design 5). Whitespace, enumeration, `maxLength`, the five base types, and the
    pattern engine. The engine is tested pattern by pattern against lxml, with a one-element schema
    per pattern.

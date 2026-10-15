@@ -59,9 +59,10 @@ supported`), because a validator that skips a constraint calls invalid documents
 `xsd.validate(mut doc, schema)` checks a document against a compiled schema. It gives each
 element the declaration its context names (one more array beside the nodes) and reports what the
 schema does not allow, with positions: an element not declared where it is, an undeclared or
-missing attribute, text in element-only content, children in simple content, an abstract type.
-`xsi:type`, `xsi:nil` and a schema the document names by `xsi:schemaLocation` are reported as
-not supported rather than guessed at. Values, and the order and number of children, are the next
+missing attribute, text in element-only content, children in simple content, an abstract type,
+`xsi:nil="true"` (no declaration can be nillable here). `xsi:type`, and a schema the document
+names itself (`xsi:schemaLocation`, `xsi:noNamespaceSchemaLocation`), are reported as not
+supported rather than guessed at. Values, and the order and number of children, are the next
 steps of the plan.
 
 ```v
@@ -104,8 +105,8 @@ Results marked *earlier* predate this repository; the parser has not changed sin
   break is not checked yet (617 of them an invalid pattern, which the pattern engine of step 4
   will catch); one is a documented divergence (a missing type is an error at once). Of 6,461
   instance tests whose schema compiles, no valid document is reported: 3,714 valid documents
-  pass, 49 invalid ones are reported, 20 use something unsupported (`xsi:type`, a schema named
-  by `xsi:schemaLocation`, XML 1.1), and 2,678 invalid ones pass because their error is in a value
+  pass, 47 invalid ones are reported, 22 use something unsupported (`xsi:type`, a schema the
+  document names itself, XML 1.1), and 2,678 invalid ones pass because their error is in a value
   or in the order or number of children (steps 4 and 5).
 - **Validation of real-world files**: 463 of the 697 files, against the schema each declares,
   agree with libxml2 on every verdict (461 valid; 2 invalid, reported at the same line).
@@ -124,7 +125,7 @@ Core Ultra 9 285H under WSL2. It is dense: 12.6M elements and 12.3M attributes, 
 
 Resolving namespaces on the same document takes about 105 ms more, roughly a tenth of the parse.
 Validating it against `testdata/inventory.xsd` (namespaces included, values and order not yet
-checked) takes about 0.5 s.
+checked) takes about 0.34 s.
 
 ## Limitations
 
