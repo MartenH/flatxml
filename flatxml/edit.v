@@ -71,6 +71,7 @@ pub:
 mut:
 	pieces []Piece
 	nodes  map[u64]NodeEdit
+	number int = -1 // its document's number in a set, when it is one of a merged view's (`MEdit`)
 }
 
 // edit starts an empty edit set over the document, which must outlive it.
