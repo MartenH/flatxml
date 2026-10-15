@@ -95,3 +95,20 @@ fn test_dfa_matches_the_pike_vm() {
 		}
 	}
 }
+
+fn test_review_cases() {
+	// a repeat of something empty is bounded at compile time, not only by the program's size
+	assert bad('((){99999}){99999}').contains('not supported')
+	// an unescaped `-` cannot end a range
+	assert bad('[!--]').contains('must be escaped in a range')
+	assert m('[!-\\-]', '-')
+	// malformed UTF-8 reads as U+FFFD, one byte at a time
+	for bytes in ['\xf8\x80\x80\x80', '\xc0\xaf', '\xed\xa0\x80', '\xf4\x90\x80\x80'] {
+		c, w := decode_rune(bytes, 0)
+		assert c == 0xFFFD && w == 1
+	}
+	c2, w2 := decode_rune('é', 0)
+	assert c2 == 0xE9 && w2 == 2
+	c4, w4 := decode_rune('\xf0\x9f\x98\x80', 0)
+	assert c4 == 0x1F600 && w4 == 4
+}

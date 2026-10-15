@@ -11,6 +11,7 @@ pub:
 mut:
 	prog []Inst
 	sets []CharSet
+	work int // emit calls made while compiling, bounded like the program's size
 }
 
 enum Op as u8 {
@@ -308,7 +309,7 @@ fn (mut p RParser) class_expr() !int {
 				if hi == not_single {
 					return p.fail('a range ends in a single character')
 				}
-			} else if e == `[` || e == `]` {
+			} else if e == `[` || e == `]` || e == `-` {
 				return p.fail('`${rune_text(e)}` must be escaped in a range')
 			} else {
 				hi = e
@@ -439,7 +440,9 @@ fn category_mask(name string) u32 {
 
 // emit compiles node n of the tree, Thompson-style, into the program.
 fn (mut c Pattern) emit(nodes []RNode, n int) ! {
-	if c.prog.len > max_program {
+	// a repeat of something empty grows no program, so the calls are bounded too
+	c.work++
+	if c.prog.len > max_program || c.work > 4 * max_program {
 		return error('it repeats too much: patterns of more than ${max_program} steps are not supported')
 	}
 	node := nodes[n]
@@ -570,6 +573,11 @@ pub fn (pat &Pattern) matches_in(mut sc Scratch, s string) bool {
 	for i < s.len {
 		ch, w := decode_rune(s, i)
 		i += w
+		// marks only tell one step from the next, so they may restart between steps
+		if sc.gen >= 0xFFFF_FFF0 {
+			sc.mark = []u32{len: sc.mark.len}
+			sc.gen = 0
+		}
 		sc.gen++
 		sc.next.clear()
 		for pc in sc.cur {
@@ -661,22 +669,25 @@ fn category_of(ch u32) u8 {
 	return category_of_run[lo]
 }
 
-// decode_rune reads the code point at byte i; a malformed sequence reads as U+FFFD, one byte.
+// decode_rune reads the code point at byte i; a malformed sequence (a stray or invalid lead
+// byte, a short or overlong sequence, a surrogate, a code point past U+10FFFF) reads as U+FFFD,
+// one byte.
 fn decode_rune(s string, i int) (u32, int) {
 	b0 := s[i]
 	if b0 < 0x80 {
 		return b0, 1
 	}
-	n := if b0 >= 0xF0 {
-		4
-	} else if b0 >= 0xE0 {
-		3
-	} else if b0 >= 0xC0 {
-		2
-	} else {
-		1
+	n, lo, hi := match true {
+		b0 >= 0xC2 && b0 <= 0xDF { 2, u8(0x80), u8(0xBF) }
+		b0 == 0xE0 { 3, u8(0xA0), u8(0xBF) }
+		b0 == 0xED { 3, u8(0x80), u8(0x9F) }
+		b0 >= 0xE1 && b0 <= 0xEF { 3, u8(0x80), u8(0xBF) }
+		b0 == 0xF0 { 4, u8(0x90), u8(0xBF) }
+		b0 >= 0xF1 && b0 <= 0xF3 { 4, u8(0x80), u8(0xBF) }
+		b0 == 0xF4 { 4, u8(0x80), u8(0x8F) }
+		else { 1, u8(0), u8(0) }
 	}
-	if n == 1 || i + n > s.len {
+	if n == 1 || i + n > s.len || s[i + 1] < lo || s[i + 1] > hi {
 		return 0xFFFD, 1
 	}
 	mut ch := u32(b0) & (u32(0x7F) >> n)
@@ -727,7 +738,7 @@ pub fn new_dfa(pat &Pattern) Dfa {
 	}
 	sc.gen++
 	pat.add(mut sc.cur, mut sc.mark, sc.gen, mut sc.stack, 0)
-	d.state_of(sc.cur)
+	d.state_of(sc.cur) or {}
 	d.scratch = sc
 	return d
 }
@@ -787,20 +798,21 @@ fn (mut d Dfa) step(st int, ch u32) ?int {
 			d.pat.add(mut sc.next, mut sc.mark, sc.gen, mut sc.stack, pc + 1)
 		}
 	}
-	if d.sets.len >= dfa_max_states {
-		d.full = true
-		return none
-	}
 	return d.state_of(sc.next)
 }
 
-// state_of is the state for the instruction list pcs, made if it is new.
-fn (mut d Dfa) state_of(pcs []u32) int {
+// state_of is the state for the instruction list pcs, made if it is new; none when it is new and
+// the DFA is full, which then marks it full.
+fn (mut d Dfa) state_of(pcs []u32) ?int {
 	mut set := pcs.clone()
 	set.sort()
 	key := set.map(it.str()).join(',')
 	if k := d.index[key] {
 		return k
+	}
+	if d.sets.len >= dfa_max_states {
+		d.full = true
+		return none
 	}
 	k := d.sets.len
 	d.sets << set

@@ -186,6 +186,31 @@ fn (vr &Validator) located_elsewhere(i u32) ?string {
 	return none
 }
 
+fn (vr &Validator) has_element_child(i u32) bool {
+	mut c := vr.d.first_child(i)
+	for c != flatxml.no_node {
+		if vr.d.is_element(c) {
+			return true
+		}
+		c = vr.d.next_sibling(c)
+	}
+	return false
+}
+
+// nilled reports whether element i carries xsi:nil="true".
+fn (vr &Validator) nilled(i u32) bool {
+	if vr.xsi == no_match {
+		return false
+	}
+	lo, hi := vr.d.attr_range(i)
+	for a := lo; a < hi; a++ {
+		if vr.d.attr_ns_of(a) == vr.xsi && vr.d.attr_local_name(a) == 'nil' {
+			return vr.d.attr_value(a).trim_space() in ['true', '1']
+		}
+	}
+	return false
+}
+
 fn (vr &Validator) xsi_type(i u32) bool {
 	if vr.xsi == no_match {
 		return false
@@ -259,7 +284,9 @@ fn (mut vr Validator) check_element(i u32, decl u32) {
 	} else {
 		TypeRef{.complex, t.idx}
 	}
-	if vr.checks(value_type) {
+	// a value that is not the document's (children joined into it, or a nil element's) is not
+	// checked: those are reported already
+	if vr.checks(value_type) && !vr.has_element_child(i) && !vr.nilled(i) {
 		vr.check_value(i, -1, value_type, vr.d.text_content(i))
 	}
 	vr.check_attrs(i, t)

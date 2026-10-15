@@ -108,6 +108,18 @@ fn (s &Schema) patterned() []bool {
 	return out
 }
 
+// shortened is v cut to fit a message, at a character boundary.
+fn shortened(v string) string {
+	if v.len <= 60 {
+		return v
+	}
+	mut k := 57
+	for k > 0 && v[k] & 0xC0 == 0x80 {
+		k--
+	}
+	return v[..k] + '...'
+}
+
 // checks reports whether values of type t have anything to be checked against, so a caller can
 // skip reading a value that would not be.
 @[inline]
@@ -123,7 +135,7 @@ fn (mut vr Validator) check_value(i u32, attr i64, t TypeRef, raw string) {
 		return
 	}
 	if vr.keep() {
-		shown := if v.len > 60 { v[..57] + '...' } else { v }
+		shown := shortened(v)
 		owner := if attr < 0 {
 			'<${vr.d.name(i)}>'
 		} else {
