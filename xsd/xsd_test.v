@@ -780,3 +780,26 @@ fn test_the_automaton_and_the_walker_agree() {
 		assert accepted > 0 && accepted < seqs.len, root
 	}
 }
+
+fn test_review_cases_for_content_models() {
+	// a particle that can occur no times is never begun (this walked forever)
+	none_body := '<xs:element name="r"><xs:complexType><xs:choice maxOccurs="unbounded">
+		<xs:element name="a" type="xs:string" minOccurs="0" maxOccurs="0"/><xs:element name="b" type="xs:string"/>
+		</xs:choice></xs:complexType></xs:element>'
+	s := compile(none_body) or { panic(err) }
+	mut d := flatxml.parse_string('<r xmlns="urn:test"><a/></r>') or { panic(err) }
+	v := validate(mut d, s) or { panic(err) }
+	assert v.findings.len == 1
+	// a fixed count above one repeats: after <b>, an <a> could end this occurrence or begin the next
+	fixed := fails('<xs:complexType name="T"><xs:choice minOccurs="2" maxOccurs="2"><xs:element name="a" type="xs:string"/>
+		<xs:sequence><xs:element name="b" type="xs:string"/><xs:element name="a" type="xs:string" minOccurs="0"/></xs:sequence>
+		</xs:choice></xs:complexType>')
+	assert fixed.contains('Unique Particle Attribution'), fixed
+	// ids are per document: one an import uses does not clash with its importer's
+	write_schema('imp.xsd', '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:imp"><xs:element name="e" id="x" type="xs:string"/></xs:schema>')
+	compile('<xs:import namespace="urn:imp" schemaLocation="imp.xsd"/><xs:element name="f" id="x" type="xs:string"/>') or {
+		assert false, err.msg()
+	}
+	dup := fails('<xs:element name="g" id="y" type="xs:string"/><xs:import namespace="urn:imp" schemaLocation="imp.xsd"/><xs:element name="h" id="y" type="xs:string"/>')
+	assert dup.contains('"y"'), dup
+}

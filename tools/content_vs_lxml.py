@@ -55,8 +55,8 @@ def apply(kind, el, k):
         c.addnext(twin)
         return lambda: el.remove(twin)
     nxt = kids[k + 1]
-    nxt.addprevious(c)  # c moves after its neighbour
-    return lambda: nxt.addnext(c)
+    nxt.addnext(c)  # c moves after its neighbour
+    return lambda: nxt.addprevious(c)
 
 
 def where(el):

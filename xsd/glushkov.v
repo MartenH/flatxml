@@ -5,8 +5,8 @@ module xsd
 //
 // - The positions of a content model are the places an element can occur. first(n) is the
 //   positions node n can begin with, last(n) those it can end with, follow(x) those that can come
-//   after position x. A particle repeats (its last positions are followed by its first) when its
-//   count can vary (max > min); a fixed count decides by itself whether to repeat.
+//   after position x. A particle repeats (its last positions are followed by its first) when it
+//   can occur more than once.
 // - Unique Particle Attribution: a child element is matched by one particle, decided without
 //   looking ahead. The model is ambiguous when two different positions of one name compete in
 //   first(root) or in some follow(x).
@@ -170,7 +170,7 @@ fn (mut g Glushkov) last_of(n u32) []u32 {
 
 // link adds the follow references node n makes: within a sequence, an item's last positions are
 // followed by the next items' first positions (past any that can be empty); a particle whose
-// count can vary is followed by itself.
+// can occur more than once is followed by itself.
 fn (mut g Glushkov) link(n u32) {
 	pt := g.particle(n)
 	if pt.max == 0 {
@@ -196,7 +196,7 @@ fn (mut g Glushkov) link(n u32) {
 			}
 		}
 	}
-	if pt.max > pt.min && pt.max > 1 {
+	if pt.max > 1 {
 		for x in g.last_of(n) {
 			g.follow[x] << n
 		}
@@ -225,7 +225,9 @@ fn (mut r Reader) check_content_models() ! {
 			continue
 		}
 		mut g := new_glushkov(r.s, root) or {
-			return error('the content model of ${where} ${err.msg()}')
+			// the walker validates it without expanding it; only this check is given up
+			r.s.notes << 'the content model of ${where} ${err.msg()}: not checked for ambiguity'
+			continue
 		}
 		g.distinct(g.first_of(0), where)!
 		// each position's followers, once for each set of references they come from

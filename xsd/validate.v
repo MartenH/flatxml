@@ -374,7 +374,8 @@ fn (mut vr Validator) check_element(i u32, decl u32) {
 	vr.check_attrs(i, t)
 	if t.kind == .complex {
 		ct := vr.s.complex_types[t.idx]
-		if ct.content in [.element_only, .mixed] && ct.particle != no_particle {
+		// a nil element's missing children are not a second finding
+		if ct.content in [.element_only, .mixed] && ct.particle != no_particle && !vr.nilled(i) {
 			vr.check_content(i, t.idx)
 		}
 	}

@@ -95,7 +95,12 @@ fn (mut r Reader) read_file(path string) !string {
 		xs:  xs
 		dir: os.dir(path)
 	}
+	// an import is read in the middle of its importer, whose ids come back after it
+	outer := r.ids
 	r.ids = map[string]bool{}
+	defer {
+		r.ids = outer
+	}
 	r.check_attrs(c0, root, ['targetNamespace', 'elementFormDefault', 'attributeFormDefault',
 		'version', 'id'])!
 	target := d.attr(root, 'targetNamespace') or { '' }

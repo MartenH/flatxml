@@ -35,6 +35,11 @@ fn (mut vr Validator) first_of(p u32) &FirstSet {
 	}
 	mut fs := &FirstSet{}
 	pt := vr.s.particles[p]
+	// a particle that can occur no times begins with nothing
+	if pt.max == 0 {
+		vr.firsts[p] = fs
+		return fs
+	}
 	match pt.kind {
 		.element {
 			fs.keys[vr.s.elements[pt.term].name.key()] = 0
@@ -148,7 +153,6 @@ fn (mut vr Validator) walk_content(i u32, ct u32) bool {
 	}
 	mut c := vr.d.first_child(i)
 	// Each element child, in order, fed through the frames.
-	vr.too_many = false
 	for c != flatxml.no_node {
 		key := if vr.d.is_element(c) { vr.key(c) or { u64(0) } } else { u64(0) }
 		if slot := idx.children[key] {
@@ -173,6 +177,7 @@ fn (mut vr Validator) walk_content(i u32, ct u32) bool {
 
 // feed matches one child named key, moving the frames on; a message when it cannot be matched.
 fn (mut vr Validator) feed(mut stack []Frame, key u64) ?string {
+	vr.too_many = false
 	for {
 		if stack.len == 0 {
 			if vr.too_many {
