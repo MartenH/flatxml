@@ -308,3 +308,89 @@ fn test_a_set_diffed_against_its_edited_model_and_patched_is_the_model() {
 	}
 	assert changes > 600 && edited_files > 300 && untouched_files > 100, '${changes} ${edited_files} ${untouched_files}'
 }
+
+const nested_rules = 'r m key=@id ordered\nm x key=@id ordered'
+
+fn applied(old map[string]string, new map[string]string, rules string, into ?IntoFn, ns bool) map[string]string {
+	rs := parse_rules(rules) or { panic(err) }
+	mut o := set_from(old)
+	mut n := set_from(new)
+	if ns {
+		for mut d in o.docs {
+			d.resolve_namespaces() or { panic(err) }
+		}
+		for mut d in n.docs {
+			d.resolve_namespaces() or { panic(err) }
+		}
+	}
+	d := diff(o.merge(rs) or { panic(err) }, n.merge(rs) or { panic(err) })
+	mut me := d.apply(into: into) or { panic(err) }
+	return written(mut me)
+}
+
+fn test_changes_inside_a_moved_node_apply() {
+	old := {
+		'a.xml': '<r><m id="1"><x id="a"/><x id="b"/></m><m id="2"/><m id="3"/></r>'
+	}
+	// a child of the moved node removed
+	assert applied(old, {
+		'n.xml': '<r><m id="2"/><m id="3"/><m id="1"><x id="b"/></m></r>'
+	}, nested_rules, none, false)['a.xml'] == '<r><m id="2"/><m id="3"/><m id="1"><x id="b"/></m></r>'
+	// and reordered
+	assert applied(old, {
+		'n.xml': '<r><m id="2"/><m id="3"/><m id="1"><x id="b"/><x id="a"/></m></r>'
+	}, nested_rules, none, false)['a.xml'] == '<r><m id="2"/><m id="3"/><m id="1"><x id="b"/><x id="a"/></m></r>'
+}
+
+fn test_a_moved_node_copied_to_another_file_takes_its_insides_with_it() {
+	old := {
+		'a.xml': '<r><m id="1"><x id="a"/>t<x id="b"/>u</m><m id="2"/><m id="3"/></r>'
+		'b.xml': '<r/>'
+	}
+	// into sends the moved node to b.xml, where its parent has a fragment: the new view's node is
+	// copied there, the runs of the old one (whose child left) are not set again
+	into := fn (f Node, p MNode) int {
+		assert f.doc.path == 'n.xml' // a fragment of the new view
+		return 1
+	}
+	out := applied(old, {
+		'n.xml': '<r><m id="2"/><m id="3"/><m id="1">t<x id="b"/>u</m></r>'
+	}, nested_rules, into, false)
+	assert out['a.xml'] == '<r><m id="2"/><m id="3"/></r>'
+	assert out['b.xml'] == '<r><m id="1">t<x id="b"/>u</m></r>'
+	// the text after a child that left stays at its slot: no text change, so no runs set again,
+	// least of all on the old node, which is out of its file
+	swapped := applied({
+		'a.xml': '<r><m id="1"><x id="a"/>t</m><m id="2"/><m id="3"/></r>'
+		'b.xml': '<r/>'
+	}, {
+		'n.xml': '<r><m id="2"/><m id="3"/><m id="1"><x id="c"/>t</m></r>'
+	}, nested_rules, into, false)
+	assert swapped['a.xml'] == '<r><m id="2"/><m id="3"/></r>'
+	assert swapped['b.xml'] == '<r><m id="1"><x id="c"/>t</m></r>'
+}
+
+fn test_attributes_are_written_with_the_prefixes_of_the_old_file() {
+	// a new attribute: with the prefix bound to its namespace there, or one declared
+	out := applied({
+		'a.xml': '<r xmlns:p="urn:x"><a/><b/></r>'
+	}, {
+		'n.xml': '<r xmlns:q="urn:x"><a q:k="1"/><b xmlns:z="urn:z" z:k="2"/></r>'
+	}, '', none, true)
+	assert out['a.xml'] == '<r xmlns:p="urn:x"><a p:k="1"/><b xmlns:z="urn:z" z:k="2"/></r>'
+	// a changed one, in each file as that file writes it
+	files := {
+		'a.xml': '<r xmlns:p="urn:x"><s id="1" p:k="1"/></r>'
+		'b.xml': '<r xmlns:q="urn:x"><s id="1" q:k="1"/></r>'
+	}
+	changed := applied(files, {
+		'n.xml': '<r xmlns:p="urn:x"><s id="1" p:k="2"/></r>'
+	}, 'r s key=@id merge', none, true)
+	assert changed['a.xml'] == '<r xmlns:p="urn:x"><s id="1" p:k="2"/></r>'
+	assert changed['b.xml'] == '<r xmlns:q="urn:x"><s id="1" q:k="2"/></r>'
+	gone := applied(files, {
+		'n.xml': '<r><s id="1"/></r>'
+	}, 'r s key=@id merge', none, true)
+	assert gone['a.xml'] == '<r xmlns:p="urn:x"><s id="1"/></r>'
+	assert gone['b.xml'] == '<r xmlns:q="urn:x"><s id="1"/></r>'
+}

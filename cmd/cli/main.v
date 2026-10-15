@@ -1110,12 +1110,11 @@ fn operand_root(p string) string {
 	return if os.is_dir(p) { p } else { os.dir(p) }
 }
 
-// relative_to is path relative to root where it is below it, else its base name.
-fn relative_to(path string, root string) string {
-	r := os.real_path(root)
+// relative_to is path relative to root, where it is below it.
+fn relative_to(path string, root string) ?string {
+	prefix := os.real_path(root) + os.path_separator
 	f := os.real_path(path)
-	prefix := r + os.path_separator
-	return if f.starts_with(prefix) { f[prefix.len..] } else { os.base(f) }
+	return if f.starts_with(prefix) { f[prefix.len..] } else { none }
 }
 
 // apply_sets reads OLD and NEW, diffs them as `diff` does, applies the diff to OLD's files, and
@@ -1136,12 +1135,26 @@ fn apply_sets(args []string) {
 	compared := sw.elapsed() - read
 	// a new element goes to the file of OLD named like the file of NEW it comes from
 	old_root, new_root := operand_root(a.paths[0]), operand_root(a.paths[1])
+	// each document of OLD by its path relative to OLD, each of NEW to the one of OLD named alike
+	mut old_names := []string{}
 	mut by_name := map[string]int{}
 	for k, doc in old.set.docs {
-		by_name[relative_to(doc.path, old_root)] = k
+		name := relative_to(doc.path, old_root) or { '' }
+		old_names << name
+		if name != '' {
+			by_name[name] = k
+		}
 	}
-	into := fn [by_name, new_root] (f flatxml.Node, p flatxml.MNode) int {
-		return by_name[relative_to(f.doc.path, new_root)] or { -1 }
+	mut to_old := map[u64]int{}
+	for doc in new.set.docs {
+		if name := relative_to(doc.path, new_root) {
+			if k := by_name[name] {
+				to_old[u64(voidptr(doc))] = k
+			}
+		}
+	}
+	into := fn [to_old] (f flatxml.Node, p flatxml.MNode) int {
+		return to_old[u64(voidptr(f.doc))] or { -1 }
 	}
 	mut me := d.apply(into: into) or {
 		eprintln('flatxml ${err}')
@@ -1157,8 +1170,21 @@ fn apply_sets(args []string) {
 	} else {
 		out = a.paths[2]
 		single := old.set.docs.len == 1 && !os.is_dir(a.paths[0]) && !a.paths[0].starts_with('@')
-		me.write_to(fn [out, old_root, single] (doc &flatxml.Doc) string {
-			return if single { out } else { os.join_path(out, relative_to(doc.path, old_root)) }
+		// a set's documents go to OUT at their places relative to OLD: one outside it has none
+		if !single {
+			for k, name in old_names {
+				if name == '' {
+					eprintln('flatxml apply: ${old.set.docs[k].path} is not below ${old_root}, so it has no place in ${out}')
+					exit(2)
+				}
+			}
+		}
+		mut paths := map[u64]string{}
+		for k, doc in old.set.docs {
+			paths[u64(voidptr(doc))] = if single { out } else { os.join_path(out, old_names[k]) }
+		}
+		me.write_to(fn [paths] (doc &flatxml.Doc) string {
+			return paths[u64(voidptr(doc))] or { '' }
 		}) or {
 			eprintln('flatxml apply: ${err}')
 			exit(2)

@@ -40,6 +40,8 @@ pub:
 	// attr: the name as the old node writes it, where it has one (by namespace, the prefix may
 	// differ)
 	old_name string
+mut:
+	akey u64 // attr: the attribute's name, hashed as the diff compared it (`attr_key`)
 }
 
 // Diff is the changes from one view to another.
@@ -346,6 +348,7 @@ fn (mut d Diff) attrs(om MNode, nm MNode) {
 						old_name: b.name
 						before:   b.value
 						after:    a.value
+						akey:     a.key
 					}
 				}
 				break
@@ -359,6 +362,7 @@ fn (mut d Diff) attrs(om MNode, nm MNode) {
 				name:   a.name
 				before: none
 				after:  a.value
+				akey:   a.key
 			}
 		}
 	}
@@ -372,6 +376,7 @@ fn (mut d Diff) attrs(om MNode, nm MNode) {
 				old_name: b.name
 				before:   b.value
 				after:    none
+				akey:     b.key
 			}
 		}
 	}
