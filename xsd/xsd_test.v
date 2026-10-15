@@ -435,3 +435,26 @@ fn test_review_cases_for_validation() {
 	// a document in no namespace that names its own schema
 	assert run('<other xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="o.xsd"/>') == [.unsupported]
 }
+
+fn test_values_not_the_documents_are_not_checked() {
+	s := compile('<xs:element name="r"><xs:complexType><xs:sequence><xs:element name="c" type="t:Code" minOccurs="0"/></xs:sequence></xs:complexType></xs:element><xs:simpleType name="Code"><xs:restriction base="xs:string"><xs:pattern value="[A-Z]+"/></xs:restriction></xs:simpleType>') or {
+		panic(err)
+	}
+	run := fn [s] (doc string) []FindingKind {
+		mut d := flatxml.parse_string(doc) or { panic(err) }
+		return kinds(validate(mut d, s) or { panic(err) })
+	}
+	assert run('<r xmlns="urn:test"><c>AB</c></r>') == []
+	assert run('<r xmlns="urn:test"><c>ab</c></r>') == [.invalid_value]
+	// children are one finding, not also a value made of their text
+	assert run('<r xmlns="urn:test"><c>AB<x>12</x></c></r>') == [.children_not_allowed]
+	// a nil element is one finding
+	assert run('<r xmlns="urn:test" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><c xsi:nil="true"/></r>') == [.not_nillable]
+}
+
+fn test_long_values_are_shortened_at_a_character() {
+	v := 'é'.repeat(40)
+	short := shortened(v)
+	assert short.ends_with('...') && short.len <= 60
+	assert short[..short.len - 3].runes().all(it == `é`)
+}

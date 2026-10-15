@@ -12,6 +12,7 @@ pub enum FindingKind {
 	children_not_allowed // child elements in simple or empty content
 	abstract_type        // the element's type is abstract
 	not_nillable         // xsi:nil="true" on an element that is not nillable (none is, here)
+	invalid_value        // an element's text or an attribute's value is not a value of its type
 	unsupported          // the document uses something this validator does not support (xsi:type)
 }
 
@@ -68,6 +69,8 @@ mut:
 	ns_map  []u32 // document namespace id -> schema namespace id (no_match when the schema has none)
 	name_map []u32 // document name id -> schema name id
 	index   []&TypeIndex // per complex type, filled on first use
+	matcher Matcher           // runs the patterns, a DFA each
+	patterned []bool          // per simple type: whether a pattern applies to its values
 	xsi     u32 // the document's id for the xsi namespace
 }
 
@@ -88,6 +91,10 @@ pub fn validate(mut d flatxml.Doc, s &Schema, opts Options) !Validation {
 		}
 		xsi:  d.ns_id(xsi_ns_uri) or { no_match }
 		index: []&TypeIndex{len: s.complex_types.len, init: unsafe { nil }}
+		patterned: s.patterned()
+		matcher:   Matcher{
+			use_dfa: true
+		}
 	}
 	vr.map_names()
 	vr.walk()
@@ -179,6 +186,31 @@ fn (vr &Validator) located_elsewhere(i u32) ?string {
 	return none
 }
 
+fn (vr &Validator) has_element_child(i u32) bool {
+	mut c := vr.d.first_child(i)
+	for c != flatxml.no_node {
+		if vr.d.is_element(c) {
+			return true
+		}
+		c = vr.d.next_sibling(c)
+	}
+	return false
+}
+
+// nilled reports whether element i carries xsi:nil="true".
+fn (vr &Validator) nilled(i u32) bool {
+	if vr.xsi == no_match {
+		return false
+	}
+	lo, hi := vr.d.attr_range(i)
+	for a := lo; a < hi; a++ {
+		if vr.d.attr_ns_of(a) == vr.xsi && vr.d.attr_local_name(a) == 'nil' {
+			return vr.d.attr_value(a).trim_space() in ['true', '1']
+		}
+	}
+	return false
+}
+
 fn (vr &Validator) xsi_type(i u32) bool {
 	if vr.xsi == no_match {
 		return false
@@ -244,6 +276,19 @@ fn (mut vr Validator) check_element(i u32, decl u32) {
 			}
 		}
 	}
+	// the element's value, when its content is simple
+	value_type := if t.kind != .complex {
+		t
+	} else if vr.s.complex_types[t.idx].content == .simple {
+		vr.s.complex_types[t.idx].simple
+	} else {
+		TypeRef{.complex, t.idx}
+	}
+	// a value that is not the document's (children joined into it, or a nil element's) is not
+	// checked: those are reported already
+	if vr.checks(value_type) && !vr.has_element_child(i) && !vr.nilled(i) {
+		vr.check_value(i, -1, value_type, vr.d.text_content(i))
+	}
 	vr.check_attrs(i, t)
 }
 
@@ -308,6 +353,10 @@ fn (mut vr Validator) check_attrs(i u32, t TypeRef) {
 		}
 		if use.required {
 			seen++
+		}
+		at := vr.s.attributes[use.decl].typ
+		if vr.checks(at) {
+			vr.check_value(i, i64(a), at, d.attr_value(a))
 		}
 	}
 	if !isnil(idx) && seen < idx.required.len {

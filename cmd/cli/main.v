@@ -10,6 +10,8 @@
 //                                  documents), answering `ok` or `error<TAB>message` per line;
 //                                  --times writes the time spent compiling to stderr
 //   flatxml validate <xsd> <doc>...   check documents against a schema, one line per finding
+//   flatxml match --batch          one `pattern<TAB>string` per stdin line: does the XSD pattern
+//                                  match the whole string (`yes`, `no`, `error<TAB>message`)
 //   flatxml validate --batch [--times]   one `document<TAB>schema documents...` per stdin line,
 //                                  answering `valid`, `invalid<TAB>kind<TAB>first finding`, or
 //                                  `error<TAB>message`; --times writes the time spent on the
@@ -29,7 +31,8 @@ const usage = 'usage:
   flatxml schema <xsd>...       compile an XML Schema (and what it imports), print what it holds
   flatxml schema --batch        one schema per stdin line (documents tab-separated): ok | error<TAB>why
   flatxml validate <xsd> <doc>...  check documents against a schema
-  flatxml validate --batch      one `document<TAB>schema...` per stdin line'
+  flatxml validate --batch      one `document<TAB>schema...` per stdin line
+  flatxml match --batch         one `pattern<TAB>string` per stdin line: yes | no | error<TAB>why'
 
 fn main() {
 	args := os.args[1..]
@@ -69,6 +72,13 @@ fn main() {
 				exit(1)
 			}
 		}
+		'match' {
+			if args[1] != '--batch' {
+				eprintln(usage)
+				exit(2)
+			}
+			match_batch()
+		}
 		'stats' {
 			parse_only := args[1] == '--parse-only'
 			mut failed := false
@@ -103,7 +113,7 @@ fn schema_batch(times bool) {
 		paths := line.trim_right('\r\n').split('\t')
 		sw := time.new_stopwatch()
 		mut answer := 'ok\n'
-		xsd.load(...paths) or { answer = 'error\t${err.msg().replace('\n', ' ')}\n' }
+		xsd.load(...paths) or { answer = 'error\t${one_line(err.msg())}\n' }
 		spent += sw.elapsed()
 		write_or_exit(mut out, answer)
 		out.flush()
@@ -175,7 +185,7 @@ fn validate_batch(times bool) {
 		key := fields[1..].join('\t')
 		if key !in schemas {
 			schemas[key] = xsd.load(...fields[1..]) or {
-				write_or_exit(mut out, 'error\tschema: ${err.msg().replace('\n', ' ')}\n')
+				write_or_exit(mut out, 'error\tschema: ${one_line(err.msg())}\n')
 				out.flush()
 				continue
 			}
@@ -193,18 +203,56 @@ fn validate_batch(times bool) {
 }
 
 fn check_one(path string, s &xsd.Schema) string {
-	mut d := flatxml.parse_file(path) or { return 'error\t${err.msg().replace('\n', ' ')}' }
+	mut d := flatxml.parse_file(path) or { return 'error\t${one_line(err.msg())}' }
 	defer {
 		d.free()
 	}
 	v := xsd.validate(mut d, s, max_findings: 1) or {
-		return 'error\t${err.msg().replace('\n', ' ')}'
+		return 'error\t${one_line(err.msg())}'
 	}
 	if v.valid() {
 		return 'valid'
 	}
 	f := v.findings[0]
-	return 'invalid\t${f.kind}\t${f.msg.replace('\n', ' ')}'
+	return 'invalid\t${f.kind}\t${one_line(f.msg)}'
+}
+
+// match_batch answers, for each `pattern<TAB>string` line of stdin, whether the XSD pattern
+// matches the whole string, keeping each compiled pattern for the lines that repeat it.
+fn match_batch() {
+	mut out := os.stdout()
+	mut compiled := map[string]xsd.Pattern{}
+	mut failed := map[string]string{}
+	mut sc := xsd.Scratch{}
+	for {
+		line := os.get_raw_line()
+		if line == '' {
+			break
+		}
+		fields := line.trim_right('\r\n').split_nth('\t', 2)
+		if fields.len != 2 {
+			write_or_exit(mut out, 'error\ta line is a pattern, a tab, then the string\n')
+			out.flush()
+			continue
+		}
+		pattern, text := fields[0], fields[1]
+		if pattern in failed {
+			write_or_exit(mut out, 'error\t${failed[pattern]}\n')
+			out.flush()
+			continue
+		}
+		if pattern !in compiled {
+			compiled[pattern] = xsd.compile_pattern(pattern) or {
+				failed[pattern] = one_line(err.msg())
+				write_or_exit(mut out, 'error\t${failed[pattern]}\n')
+				out.flush()
+				continue
+			}
+		}
+		pat := compiled[pattern] or { continue }
+		write_or_exit(mut out, if pat.matches_in(mut sc, text) { 'yes\n' } else { 'no\n' })
+		out.flush()
+	}
 }
 
 // print_schema compiles the schema documents at paths and counts what they declare.
@@ -327,6 +375,15 @@ fn dump_events(path string, ns bool) {
 		flush_run(mut sb, mut run, depth[run_parent])
 	}
 	write_or_exit(mut out, sb.str())
+}
+
+// one_line is s as one line of a batch answer: every control character a space, so a quoted value
+// cannot split the answer.
+fn one_line(s string) string {
+	if !s.bytes().any(it < 0x20) {
+		return s
+	}
+	return s.bytes().map(if it < 0x20 { u8(` `) } else { it }).bytestr()
 }
 
 // write_or_exit writes s, or exits with status 1: a truncated dump must not look like a whole one.

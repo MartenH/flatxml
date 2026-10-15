@@ -52,7 +52,8 @@ pub mut:
 	name        QName // {0, 0} for an anonymous type
 	base        TypeRef
 	enums       []string
-	patterns    []string
+	patterns    []string  // as written
+	compiled    []Pattern // the same, compiled
 	white_space WhiteSpace
 	max_length  int = -1
 }

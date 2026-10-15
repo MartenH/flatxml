@@ -151,12 +151,66 @@ this element" before "is it in the right place".
    On the W3C suite no valid document is reported (6,461 instance tests); 2,678 invalid ones pass
    because their error is in a value or the order of children. 463 real-world files agree with
    libxml2 on every verdict. About 0.34 s on the 500 MB benchmark, namespaces included.
-4. **Simple types** (design 5). Whitespace, enumeration, `maxLength`, the five base types, and the
-   pattern engine. The engine is tested pattern by pattern against lxml, with a one-element schema
-   per pattern.
+4. **Simple types** (design 5), in two parts.
+   - **4a, patterns** (done): the pattern engine (`pattern.v`: a parser for XSD's regex syntax, a
+     Pike VM and a lazily built DFA over it), patterns compiled with their schema, and values
+     checked against them after whitespace normalisation. `tools/patterns_vs_lxml.py` compares it
+     with libxml2 string by string. On the W3C suite, invalid schemas that compile fell from 744 to
+     127 and invalid documents that pass from 2,678 to 1,191, with no valid schema or document
+     rejected. Unicode blocks and `\i`/`\c` are refused (505 suite schemas, none real-world).
+   - **4b, the rest of the facets**: whitespace, enumeration (compared by value), `maxLength`, and
+     the built-in types' lexical spaces, both on values in documents and on the enumeration values
+     in a schema.
 5. **Content models** (design 4). Order and occurrence, compared with lxml on the generated
-   mutations.
-6. **Typed values** (design 7).
+   mutations and the W3C suite, whose right-verdict rate should reach lxml's (about 99%).
+6. **Typed values and the API** (design 7). Read values by type, and give users a small, safe
+   surface over the arrays: node handles, iterators that allocate nothing, file-level shortcuts,
+   findings with positions, a schema that cannot be changed from outside. The README's examples
+   compile in CI; the benchmark shows the handles cost nothing.
+7. **Parse speed.** Close the gap to pugixml (0.94 s against flatxml's 1.19 s on the 500 MB
+   benchmark) without giving up interned names: the techniques below, each kept only if
+   `tools/compare/run.sh` shows it pays.
+
+## Techniques taken from other engines
+
+Each is adopted at a step, and kept only if the benchmark or the suite shows it pays.
+
+- **Patterns: a linear-time engine** (step 4), after RE2 and Go's `regexp`: a pattern compiles to
+  an NFA run as a Pike VM, so no input can make it backtrack, with DFA states built lazily and
+  cached as they are met. Measured on a 6.8 MB real-world file, whose values are mostly
+  identifiers and paths: validation 25 ms with the Pike VM, 7 ms with the DFA (the parse takes
+  8 ms).
+- **A verdict per distinct value** (step 4), tried and dropped: each simple type remembered the
+  strings it had accepted, so a repeat cost a hash lookup instead of a pattern run. It paid
+  against the Pike VM; against the lazy DFA, hashing a value costs as much as matching it, and
+  validation measured the same with and without it.
+- **Lexical checks by character table** (step 4): validating a built-in type needs to know that a
+  value is well formed, not its number, so most checks are a table-driven scan with no conversion.
+- **Counters, not unrolling** (step 5), as libxml2's automata do: expanding `maxOccurs="5000"` into
+  5,000 states is a known denial of service (Xerces-J caps it at 5,000 under secure processing),
+  and counts here are stored up to 2³²−2.
+- **Glushkov automata** (step 5), as Xerces builds them: the construction that gives a content
+  model's automaton also proves the Unique Particle Attribution rule.
+- **Unordered content as a set** (step 5): a choice of any number of children is one state looping
+  to itself, so it is the membership check step 3 already makes. Most content in the real-world
+  schemas is shaped that way.
+- **A null handle** (step 6), after pugixml: a missing node is a valid empty node, so
+  `root.child('a').child('b').attr('x')` chains without a check at every step, with typed reads
+  that take a default (`as_int(0)`).
+- **Element paths** (step 6), after ElementTree and lxml: `find('a/b')` and `iter('item')`,
+  compiled once into name ids.
+- **Character-class tables and unrolled scans** (step 7), as pugixml scans: one table lookup
+  classifies a byte, and the hot loops test several bytes per iteration.
+- **Arrays sized once** (step 7): on dense input the node arrays double several times and copy
+  hundreds of MB; a `memchr` count of `<` bounds the node count, so the arrays are allocated
+  once.
+- **Recent names before hashing** (step 7): siblings usually share a name, so a length and bytes
+  check against the last few names skips most of the hashing.
+- **SIMD structural indexing** (later, if ever): Parabix and icXML find every markup position in
+  parallel, as simdjson does for JSON. A project of its own.
+
+Not taken: validating schema documents against the schema for schemas, as xmlschema and Xerces
+do to catch invalid schemas, because that schema uses constructs outside the subset.
 
 ## How consumers take this repository
 
