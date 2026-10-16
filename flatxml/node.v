@@ -443,6 +443,61 @@ pub fn (n Node) at(p string) Node {
 	return n.find(n.doc.tab.path(p))
 }
 
+// find_by is find, the names compared without their prefix where local is set (namespaces
+// resolved).
+fn (n Node) find_by(p Path, local bool) Node {
+	if !local {
+		return n.find(p)
+	}
+	if n.i == no_node || p.names.len == 0 {
+		return Node{n.doc, no_node}
+	}
+	return Node{n.doc, n.doc.find_local(n.i, p.ids_for(n.doc.tab), 0)}
+}
+
+// find_all_by is find_all, the names compared without their prefix where local is set.
+fn (n Node) find_all_by(p Path, local bool) []Node {
+	if !local {
+		return n.find_all(p)
+	}
+	mut out := []Node{}
+	if n.i != no_node && p.names.len > 0 {
+		n.doc.collect_local(n.i, p.ids_for(n.doc.tab), 0, mut out)
+	}
+	return out
+}
+
+fn (d &Doc) find_local(i u32, ids []u32, k int) u32 {
+	mut c := d.first_child(i)
+	for c != no_node {
+		if d.tag[c] != text_tag && d.tab.local[d.tag[c]] == ids[k] {
+			if k == ids.len - 1 {
+				return c
+			}
+			found := d.find_local(c, ids, k + 1)
+			if found != no_node {
+				return found
+			}
+		}
+		c = d.next_sibling(c)
+	}
+	return no_node
+}
+
+fn (d &Doc) collect_local(i u32, ids []u32, k int, mut out []Node) {
+	mut c := d.first_child(i)
+	for c != no_node {
+		if d.tag[c] != text_tag && d.tab.local[d.tag[c]] == ids[k] {
+			if k == ids.len - 1 {
+				out << Node{d, c}
+			} else {
+				d.collect_local(c, ids, k + 1, mut out)
+			}
+		}
+		c = d.next_sibling(c)
+	}
+}
+
 // find_all is every element at path p below n, in document order.
 pub fn (n Node) find_all(p Path) []Node {
 	mut out := []Node{}

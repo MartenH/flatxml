@@ -1291,3 +1291,56 @@ fn test_a_child_missing_its_key_has_the_keyed_rule() {
 	assert kids.all(it.rule_number()? == 0)
 	assert kids[0].keyed() && !kids[1].keyed()
 }
+
+fn resolved_set(files map[string]string) &DocSet {
+	mut s := DocSet.new()
+	for name, body in files {
+		mut d := parse_bytes(body.bytes(), name) or { panic(err) }
+		d.resolve_namespaces() or { panic(err) }
+		s.add(mut d)
+	}
+	return s
+}
+
+const local_a = '<r xmlns="urn:d"><item><name>x</name><v>1</v></item></r>'
+const local_b = '<p:r xmlns:p="urn:d"><p:item><p:name>x</p:name><p:w>2</p:w></p:item><p:item><p:name>y</p:name></p:item></p:r>'
+
+fn test_local_names_merge_documents_that_spell_a_namespace_differently() {
+	s := resolved_set({
+		'a.xml': local_a
+		'b.xml': local_b
+	})
+	mut rs := parse_rules('r item key=name merge\nitem name,v,w single merge\n!local')!
+	assert rs.local_names
+	mut m := s.merge(rs)!
+	assert m.problems.map(m.describe(it)) == []
+	root := m.root()
+	assert root.fragment_count() == 2
+	assert root.name() == 'r'
+	assert names_of(root) == ['item:x', 'item:y']
+	x := root.child('item', 'x')
+	assert x.fragment_count() == 2
+	assert names_of(x).sorted() == ['name', 'v', 'w']
+	assert format_rules(rs)!.contains('!local\n')
+}
+
+fn test_without_local_names_a_prefix_is_part_of_the_name() {
+	s := resolved_set({
+		'a.xml': local_a
+		'b.xml': local_b
+	})
+	m := s.merge(parse_rules('r item key=name merge')!)!
+	assert kinds(m) == [.name_differs]
+	assert m.root().fragment_count() == 1
+}
+
+fn test_local_names_need_namespaces_resolved() {
+	s := set_of({
+		'a.xml': local_a
+	})
+	s.merge(parse_rules('!local')!) or {
+		assert err.msg().contains('namespaces resolved')
+		return
+	}
+	assert false
+}

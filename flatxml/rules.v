@@ -103,6 +103,9 @@ pub struct RuleSet {
 pub:
 	rules        []Rule
 	fold         bool     // keys compared ignoring ASCII case
+	// element names compared without their prefix: `p:x` and `x` are one name, and a rule, a key
+	// path and a merged node name the local name. The set's namespaces must be resolved.
+	local_names bool
 	ignore_attrs []string // attributes whose values may differ between contributions to a node
 	classify     ?ClassFn // the class of a parent, for rules that name one (`%class`)
 }
@@ -136,6 +139,7 @@ struct CRule {
 struct CompiledRules {
 	rules    []CRule
 	fold     bool
+	local    bool // element names compared without their prefix
 	ignore   []u32 // ids of the attributes not compared
 	classify ?ClassFn
 mut:
@@ -178,7 +182,8 @@ fn any_name(s string) bool {
 // refused.
 fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 	mut out := CompiledRules{
-		fold: rs.fold
+		fold:  rs.fold
+		local: rs.local_names
 	}
 	mut seen := map[string]int{}
 	mut rules := []CRule{cap: rs.rules.len}
@@ -274,6 +279,7 @@ fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 		rules:    rules
 		ignore:   ignore
 		classify: rs.classify
+		local:    rs.local_names
 	}
 }
 
@@ -433,17 +439,17 @@ fn (mut cr CompiledRules) resolve(ctx u32, child u32) u32 {
 }
 
 // key is the child's key under a keyed rule; none when it has none.
-fn (cr &CRule) key(c Node) ?string {
+fn (cr &CRule) key(c Node, local bool) ?string {
 	if f := cr.key_fn {
 		return f(c)
 	}
 	if cr.parts.len == 1 {
-		return cr.parts[0].read(c)
+		return cr.parts[0].read(c, local)
 	}
 	mut parts := []string{len: cr.parts.len}
 	mut any := false
 	for k, p in cr.parts {
-		if s := p.read(c) {
+		if s := p.read(c, local) {
 			parts[k] = s
 			any = true
 		}
@@ -451,7 +457,7 @@ fn (cr &CRule) key(c Node) ?string {
 	return if any { parts.join(key_sep) } else { none }
 }
 
-fn (p &KeyPart) read(c Node) ?string {
+fn (p &KeyPart) read(c Node, local bool) ?string {
 	if p.own {
 		t := own_key_text(c)
 		return if t == '' { none } else { t }
@@ -459,7 +465,7 @@ fn (p &KeyPart) read(c Node) ?string {
 	if p.all && p.path.names.len > 0 {
 		mut texts := []string{}
 		// one slot an occurrence, '' where its attribute is absent, so length and order count
-		for n in c.find_all(p.path) {
+		for n in c.find_all_by(p.path, local) {
 			texts << if p.attr == no_name {
 				n.text()
 			} else {
@@ -468,7 +474,7 @@ fn (p &KeyPart) read(c Node) ?string {
 		}
 		return if texts.len == 0 { none } else { texts.join(key_list_sep) }
 	}
-	n := if p.path.names.len == 0 { c } else { c.find(p.path) }
+	n := if p.path.names.len == 0 { c } else { c.find_by(p.path, local) }
 	if !n.ok() {
 		return none
 	}
@@ -501,6 +507,7 @@ fn own_key_text(c Node) string {
 //
 //   # a comment; blank lines are ignored
 //   !fold                   keys are compared ignoring ASCII case
+//   !local                  element names compared without their prefix (namespaces resolved)
 //   !ignore <attr>...       attributes whose values may differ between contributions
 //   <parent> <child>[,<child>...] [key=<path>[,<path>...]] [keyless=own|empty|quiet] [single] [merge]
 //                           [ordered] [max=<n>]
@@ -512,7 +519,7 @@ fn own_key_text(c Node) string {
 // rule. Rules are listed in the order their children are written.
 pub fn parse_rules(text string) !RuleSet {
 	mut rules := []Rule{}
-	mut fold := false
+	mut fold, mut local := false, false
 	mut ignore := []string{}
 	for n, raw in text.split_into_lines() {
 		line := raw.all_before('#').trim_space()
@@ -530,6 +537,12 @@ pub fn parse_rules(text string) !RuleSet {
 				}
 				'!ignore' {
 					ignore << words[1..]
+				}
+				'!local' {
+					if words.len > 1 {
+						return error('line ${n + 1}: `!local` takes nothing')
+					}
+					local = true
 				}
 				else {
 					return error('line ${n + 1}: unknown setting `${words[0]}`')
@@ -586,6 +599,7 @@ pub fn parse_rules(text string) !RuleSet {
 		rules:        rules
 		fold:         fold
 		ignore_attrs: ignore
+		local_names:  local
 	}
 }
 
@@ -600,6 +614,9 @@ pub fn format_rules(rs RuleSet) !string {
 	mut lines := []string{}
 	if rs.fold {
 		lines << '!fold'
+	}
+	if rs.local_names {
+		lines << '!local'
 	}
 	if rs.ignore_attrs.len > 0 {
 		for a in rs.ignore_attrs {

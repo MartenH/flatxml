@@ -126,6 +126,13 @@ pub fn (s &DocSet) merge(rules RuleSet) !&Merged {
 	for d in s.docs {
 		total += d.len() - 1 - d.text_node_count()
 	}
+	if rules.local_names {
+		for d in s.docs {
+			if d.ns.len != d.tag.len {
+				return error('${d.path}: merging by local names needs namespaces resolved')
+			}
+		}
+	}
 	mut m := &Merged{
 		set:     s
 		rules:   rules.compile(s.tab)!
@@ -187,13 +194,20 @@ fn (mut m Merged) fit() {
 	}
 }
 
+// name_of is the name id element i of d is merged by: its local name's with local names.
+@[inline]
+fn (m &Merged) name_of(d &Doc, i u32) u32 {
+	t := d.tag[i]
+	return if m.rules.local && t != text_tag { d.tab.local[t] } else { t }
+}
+
 // build makes the merged root, then the children of every merged node in turn.
 fn (mut m Merged) build() {
 	s := m.set
-	root_tag := s.docs[0].tag[1]
+	root_tag := m.name_of(s.docs[0], 1)
 	mut at := [s.docs[0].root_node()]
 	for k, d in s.docs {
-		if d.tag[1] == root_tag {
+		if m.name_of(d, 1) == root_tag {
 			put(m.frags, m.nfrags, Frag{u32(k), 1})
 			m.nfrags++
 		} else {
@@ -265,7 +279,7 @@ fn (mut m Merged) expand(p u32) {
 		stop := d.end[fr.i]
 		mut c := fr.i + 1
 		for c < stop {
-			t := d.tag[c]
+			t := m.name_of(d, c)
 			if t != text_tag {
 				if ctx == no_rule {
 					ctx = m.rules.context(m, p)
@@ -458,7 +472,7 @@ fn (mut m Merged) keyed(p u32, rule &CRule, r u32, k int, e int) {
 	// with keyless=empty, a key with no text is the empty key, as an absent one is
 	empty_is_absent := rule.keyless == .empty
 	for j in k .. e {
-		if key := rule.key(m.kid_node(j)) {
+		if key := rule.key(m.kid_node(j), m.rules.local) {
 			if !(empty_is_absent && empty_key(key)) {
 				m.keys << key
 				m.order << j
