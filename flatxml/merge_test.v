@@ -1396,14 +1396,18 @@ fn test_a_local_namespace_names_its_own_elements_and_no_others() {
 		Case{'one namespace, spelled two ways', '<q:r xmlns:q="urn:d"><q:item><q:name>x</q:name></q:item></q:r>', 'r item key=name merge', [
 			'item:x',
 		], 2, []},
-		Case{'a prefixed element of another namespace keeps its name', '<r xmlns="urn:d" xmlns:ext="urn:e"><ext:item><name>x</name></ext:item></r>', 'r item key=name merge', [
+		Case{'an element of another namespace goes by its expanded name', '<r xmlns="urn:d" xmlns:ext="urn:e"><ext:item><name>x</name></ext:item></r>', 'r item key=name merge', [
 			'item:x',
-			'ext:item',
+			'{urn:e}item',
 		], 1, []},
-		Case{'a rule names another namespace as written', '<r xmlns="urn:d" xmlns:ext="urn:e"><ext:item><name>x</name></ext:item></r>', 'r ext:item key=name merge', [
-			'ext:item:x', // ruled children first, those no rule names after
+		Case{'a rule names another namespace by expanded name', '<r xmlns="urn:d" xmlns:ext="urn:e"><ext:item><name>x</name></ext:item></r>', 'r {urn:e}item key=name merge', [
+			'{urn:e}item:x', // ruled children first, those no rule names after
 			'item',
 		], 1, []},
+		Case{'one prefix bound to two namespaces is two names', '<r xmlns="urn:d" xmlns:item="urn:x"><item><name>x</name></item><item:k/></r>', 'r item key=name merge', [
+			'item:x',
+			'{urn:x}k',
+		], 2, []},
 		Case{'a key path is of the namespace too', '<q:r xmlns:q="urn:d"><q:item><q:name>x</q:name></q:item></q:r>', 'r item key=name merge', [
 			'item:x',
 		], 2, []},
@@ -1476,6 +1480,13 @@ fn test_an_unprefixed_element_of_another_namespace_is_not_the_local_ones() {
 	m := s.merge(parse_rules('r item single merge\n!local urn:d')!)!
 	root := m.root()
 	assert names_of(root) == ['item', '{urn:v}item']
+	// a prefixed and an unprefixed spelling of one foreign namespace are one name
+	o := resolved_set({
+		'a.xml': '<r xmlns="urn:d" xmlns:v="urn:v"><v:k>1</v:k></r>'
+		'b.xml': '<r xmlns="urn:d"><k xmlns="urn:v">1</k></r>'
+	}).merge(parse_rules('r * single merge\n!local urn:d')!)!
+	assert names_of(o.root()) == ['{urn:v}k']
+	assert o.problems.len == 0
 	assert root.child('item', '').fragment_count() == 1
 	assert root.kids()[1].local_name() == 'item'
 	// nor is one in no namespace
@@ -1484,4 +1495,26 @@ fn test_an_unprefixed_element_of_another_namespace_is_not_the_local_ones() {
 		'b.xml': '<r xmlns="urn:d"><item xmlns=""/></r>'
 	}).merge(parse_rules('r item single merge\n!local urn:d')!)!
 	assert names_of(n.root()) == ['item', '{}item']
+}
+
+fn test_attributes_are_told_by_their_expanded_names() {
+	// a declaration is not the attribute it looks like: xmlns:id is not id
+	s := resolved_set({
+		'a.xml': '<r xmlns="urn:d" xmlns:id="urn:z"/>'
+		'b.xml': '<r xmlns="urn:d" id="7"/>'
+	})
+	mut m := s.merge(parse_rules('!local urn:d')!)!
+	mut sb := strings.new_builder(64)
+	m.write(mut sb)!
+	assert sb.str().contains('id="7"'), sb.str()
+	// p:id and q:id, bound to one URI, are one attribute with or without a local namespace, and
+	// `!ignore` names it by its expanded name
+	for rules in ['', '!local urn:d'] {
+		t := resolved_set({
+			'a.xml': '<r xmlns="urn:d" xmlns:p="urn:d" p:id="1"/>'
+			'b.xml': '<r xmlns="urn:d" xmlns:q="urn:d" q:id="2"/>'
+		})
+		assert kinds(t.merge(parse_rules(rules)!)!) == [.value_differs], rules
+		assert kinds(t.merge(parse_rules(rules + '\n!ignore {urn:d}id')!)!) == [], rules
+	}
 }

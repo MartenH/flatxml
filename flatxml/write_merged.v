@@ -267,20 +267,25 @@ fn (mut w MergedWriter) extra_attrs(n u32, d &Doc, i u32, mut inner map[string]s
 	f0 := m.frags[m.frag_lo[n]] // d's element i
 	own := w.bindings_in(f0.doc, f0.i)
 	for a := lo; a < hi; a++ {
-		have[expanded_attr(d.attr_name(a), own)] = true
-		used[prefix_of(d.attr_name(a))] = true
+		name := d.attr_name(a)
+		used[prefix_of(name)] = true
+		// a declaration is a binding, not an attribute: `xmlns:id` is not `id`
+		if !is_ns_decl_name(name) {
+			have[expanded_attr(name, own)] = true
+		}
 	}
 	mut out := []AttrChange{}
 	for k := m.frag_lo[n] + 1; k < m.frag_lo[n + 1]; k++ {
 		f := m.frags[k]
 		fd := m.set.docs[f.doc]
 		flo, fhi := fd.attr_range(f.i)
+		scope := w.bindings_in(f.doc, f.i)
 		for a := flo; a < fhi; a++ {
 			name := fd.attr_name(a)
 			if is_ns_decl_name(name) {
 				continue
 			}
-			key := expanded_attr(name, w.bindings_in(f.doc, f.i))
+			key := expanded_attr(name, scope)
 			if key in have {
 				continue
 			}
@@ -290,7 +295,7 @@ fn (mut w MergedWriter) extra_attrs(n u32, d &Doc, i u32, mut inner map[string]s
 				out << AttrChange{name, fd.attr_value(a)}
 				continue
 			}
-			uri := w.bindings_in(f.doc, f.i)[p] or { '' }
+			uri := scope[p] or { '' }
 			if uri == '' {
 				out << AttrChange{name, fd.attr_value(a)}
 				continue
