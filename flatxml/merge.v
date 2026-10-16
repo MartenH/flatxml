@@ -94,7 +94,7 @@ mut:
 	missing    []int  // keyed's children without a key
 	kid_sort   []Kid  // expand's children, sorted by aggregation
 	held       []Held // differs' attributes, of the first fragment to give each
-	ignore_ids []u32  // differs' ignored attribute identities, for one node
+	ignored    map[u32]bool // differs' ignored attribute identities, for one node
 	keys       []string
 }
 
@@ -215,7 +215,7 @@ pub fn (s &DocSet) merge(rules RuleSet) !&Merged {
 		m.missing.free()
 		m.kid_sort.free()
 		m.held.free()
-		m.ignore_ids.free()
+		m.ignored.free()
 	}
 	return m
 }
@@ -777,12 +777,14 @@ fn (mut m Merged) differs(n u32) {
 	// them: otherwise the text is the one run, and comparing the texts needs no list of runs
 	mut t0 := []TextRun{}
 	mut t0_read := false
-	s0 := n0.text()
+	// and its whole text, read once a comparison gets that far
+	mut s0 := ''
+	mut s0_read := false
 	a_lo, a_hi := d0.attr_range(f0.i)
 	// an attribute any contribution spells by an ignored name is ignored in all of them: the
 	// identities of the ignored spellings, collected before anything is compared
-	// (a list kept between nodes, not a map per node: there are few)
-	m.ignore_ids.clear()
+	// (one map kept between nodes, not a map per node)
+	m.ignored.clear()
 	if m.rules.ignore.len > 0 {
 		for x_f in lo .. hi {
 			f := m.frags[x_f]
@@ -790,10 +792,7 @@ fn (mut m Merged) differs(n u32) {
 			x_lo, x_hi := d.attr_range(f.i)
 			for x := x_lo; x < x_hi; x++ {
 				if d.attr_tag[x] in m.rules.ignore || d.attr_id(x) in m.rules.ignore {
-					id := d.attr_id(x)
-					if id !in m.ignore_ids {
-						m.ignore_ids << id
-					}
+					m.ignored[d.attr_id(x)] = true
 				}
 			}
 		}
@@ -810,10 +809,13 @@ fn (mut m Merged) differs(n u32) {
 			t0 = n0.text_runs()
 			t0_read = true
 		}
-		differ := if mixed {
-			nf.text_runs() != t0 || nf.text() != s0
-		} else {
-			nf.text() != s0
+		mut differ := mixed && nf.text_runs() != t0
+		if !differ {
+			if !s0_read {
+				s0 = n0.text()
+				s0_read = true
+			}
+			differ = nf.text() != s0
 		}
 		if differ {
 			m.problems << Problem{
@@ -826,7 +828,7 @@ fn (mut m Merged) differs(n u32) {
 		}
 		b_lo, b_hi := d.attr_range(f.i)
 		for b := b_lo; b < b_hi; b++ {
-			if d.attr_tag[b] in m.rules.ignore || d.attr_id(b) in m.ignore_ids {
+			if d.attr_tag[b] in m.rules.ignore || d.attr_id(b) in m.ignored {
 				continue
 			}
 			// the first fragment that has this attribute, which a later one is compared with: the
@@ -837,7 +839,7 @@ fn (mut m Merged) differs(n u32) {
 					continue
 				}
 				found = true
-				if h.doc.attr_tag[h.a] in m.rules.ignore || h.doc.attr_id(h.a) in m.ignore_ids {
+				if h.doc.attr_tag[h.a] in m.rules.ignore || h.doc.attr_id(h.a) in m.ignored {
 					break
 				}
 				if h.doc.attr_value(h.a) != d.attr_value(b) {
