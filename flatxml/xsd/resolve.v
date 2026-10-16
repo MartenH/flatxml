@@ -102,10 +102,10 @@ fn (mut r Reader) resolve() ! {
 		mut from := map[u64]u64{}
 		for g in r.ct_agroups[u32(ct)] or { []u32{} } {
 			// joined as union_of joins, recording the uses it keeps
-			for u in r.flatten(g)! {
+			for j, u in r.flatten(g)! {
 				if !r.s.complex_types[ct].attrs.any(it.decl == u.decl) {
 					r.s.complex_types[ct].attrs << u
-					from[use_key(u)] = r.origin_of(g, u.decl) or { 0 }
+					from[use_key(u)] = r.agroups[g].origins[j]
 				}
 			}
 		}
@@ -166,24 +166,6 @@ fn (mut r Reader) finish(ct u32) ! {
 	r.ct_state[ct] = 2
 }
 
-// origin_of is where the use of decl that group g gives is written: the group, nested or not,
-// and its place there, in the order flatten joins them (the group's own uses, then each it
-// refers to), so the use the group keeps.
-fn (r &Reader) origin_of(g u32, decl u32) ?u64 {
-	ag := r.agroups[g]
-	for i in 0 .. int(ag.own) {
-		if ag.attrs[i].decl == decl {
-			return u64(g) << 32 | u64(i)
-		}
-	}
-	for sub in ag.refs {
-		if o := r.origin_of(sub, decl) {
-			return o
-		}
-	}
-	return none
-}
-
 fn use_key(u AttrUse) u64 {
 	return u64(u.decl) << 1 | u64(u.required)
 }
@@ -233,10 +215,18 @@ fn (mut r Reader) flatten(g u32) ![]AttrUse {
 	}
 	r.agroups[g].busy = true
 	mut attrs := r.agroups[g].attrs.clone()
+	mut origins := []u64{len: attrs.len, init: u64(g) << 32 | u64(index)}
 	for sub in r.agroups[g].refs {
-		attrs = union_of(attrs, r.flatten(sub)!)
+		// joined as union_of joins, each kept use with where it is written
+		for j, u in r.flatten(sub)! {
+			if !attrs.any(it.decl == u.decl) {
+				attrs << u
+				origins << r.agroups[sub].origins[j]
+			}
+		}
 	}
 	r.agroups[g].attrs = attrs
+	r.agroups[g].origins = origins
 	r.agroups[g].busy = false
 	r.agroups[g].done = true
 	return attrs

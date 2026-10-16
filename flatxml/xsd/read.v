@@ -46,7 +46,7 @@ mut:
 	pending    []Pending
 	ct_agroups map[u32][]u32 // complex type -> attribute groups it references
 	// complex type -> its uses (use_key) that came through an attribute group, inherited ones
-	// too, each with where it is written (origin_of)
+	// too, each with where it is written (AttrGroup.origins)
 	ct_from_group map[u32]map[u64]u64
 	ct_base    map[u32]u32   // complex type -> the complex type its simple content extends
 	ct_state   []u8          // finish: 0 not yet, 1 in progress, 2 done
@@ -66,7 +66,9 @@ struct AttrGroup {
 mut:
 	name  QName
 	attrs []AttrUse
-	own   u32   // how many of attrs are written in the group itself
+	// where each of attrs is written, once flattened: the group and its place there
+	origins []u64
+	own     u32 // how many of attrs are written in the group itself
 	refs  []u32 // the attribute groups it references
 	done  bool
 	busy  bool
