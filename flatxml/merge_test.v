@@ -1318,14 +1318,15 @@ fn resolved_set(files map[string]string) &DocSet {
 const local_a = '<r xmlns="urn:d"><item><name>x</name><v>1</v></item></r>'
 const local_b = '<p:r xmlns:p="urn:d"><p:item><p:name>x</p:name><p:w>2</p:w></p:item><p:item><p:name>y</p:name></p:item></p:r>'
 
-fn test_local_names_merge_documents_that_spell_a_namespace_differently() {
+fn test_a_local_namespace_merges_documents_that_spell_it_differently() {
 	s := resolved_set({
 		'a.xml': local_a
 		'b.xml': local_b
 	})
-	mut rs := parse_rules('r item key=name merge\nitem name,v,w single merge\n!local')!
-	assert rs.local_names
+	rs := parse_rules('r item key=name merge\nitem name,v,w single merge\n!local urn:d')!
+	assert rs.local_ns == 'urn:d'
 	mut m := s.merge(rs)!
+	// the namespace declarations differ (xmlns, xmlns:p) and are not compared
 	assert m.problems.map(m.describe(it)) == []
 	root := m.root()
 	assert root.fragment_count() == 2
@@ -1334,10 +1335,19 @@ fn test_local_names_merge_documents_that_spell_a_namespace_differently() {
 	x := root.child('item', 'x')
 	assert x.fragment_count() == 2
 	assert names_of(x).sorted() == ['name', 'v', 'w']
-	assert format_rules(rs)!.contains('!local\n')
+	assert format_rules(rs)!.contains('!local urn:d\n')
+	// prefixes swapped between two documents: the same declaration names say different things,
+	// and are not compared
+	sw := resolved_set({
+		'a.xml': '<p:r xmlns:p="urn:d" xmlns:q="urn:e"><p:item><p:name>x</p:name></p:item></p:r>'
+		'b.xml': '<q:r xmlns:q="urn:d" xmlns:p="urn:e"><q:item><q:name>x</q:name></q:item></q:r>'
+	})
+	mut ms := sw.merge(parse_rules('r item key=name merge\n!local urn:d')!)!
+	assert ms.problems.map(ms.describe(it)) == []
+	assert ms.root().child('item', 'x').fragment_count() == 2
 }
 
-fn test_without_local_names_a_prefix_is_part_of_the_name() {
+fn test_without_a_local_namespace_a_prefix_is_part_of_the_name() {
 	s := resolved_set({
 		'a.xml': local_a
 		'b.xml': local_b
@@ -1347,55 +1357,75 @@ fn test_without_local_names_a_prefix_is_part_of_the_name() {
 	assert m.root().fragment_count() == 1
 }
 
-fn test_local_names_need_namespaces_resolved() {
+fn test_a_local_namespace_needs_namespaces_resolved() {
 	s := set_of({
 		'a.xml': local_a
 	})
-	s.merge(parse_rules('!local')!) or {
+	s.merge(parse_rules('!local urn:d')!) or {
 		assert err.msg().contains('namespaces resolved')
 		return
 	}
 	assert false
 }
 
-fn test_local_names_take_rules_spelled_with_a_prefix() {
-	s := resolved_set({
-		'a.xml': local_a
-		'b.xml': local_b
-	})
-	// the rules spell the names as one document does; with local names they are local names
-	m := s.merge(parse_rules('p:r p:item key=p:name merge\np:item p:name,v,p:w single merge\n!local')!)!
-	assert m.problems.len == 0
-	root := m.root()
-	assert names_of(root) == ['item:x', 'item:y']
-	assert root.child('p:item', 'x').fragment_count() == 2
-	assert names_of(root.child('item', 'x')).sorted() == ['name', 'v', 'w']
+fn test_the_local_setting_takes_one_namespace() {
+	for text in ['!local', '!local a b'] {
+		parse_rules(text) or {
+			assert err.msg().contains('takes a namespace URI')
+			continue
+		}
+		assert false, text
+	}
 }
 
-fn test_a_view_knows_whether_every_document_was_resolved() {
-	mut a := parse_bytes(local_a.bytes(), 'a.xml') or { panic(err) }
-	a.resolve_namespaces() or { panic(err) }
-	mut b := parse_bytes(local_b.bytes(), 'b.xml') or { panic(err) }
-	mut s := DocSet.new()
-	s.add(mut a)
-	s.add(mut b)
-	// resolving a split the shared table's names; b is still unresolved, so local names are not
-	// to be had from this view
-	m := s.merge(parse_rules('')!)!
-	assert !m.resolved
-	assert !names_resolved(m)
-	b.resolve_namespaces() or { panic(err) }
-	assert names_resolved(m)
-}
-
-fn test_local_names_keep_another_namespace_apart() {
-	// <ext:item> is in another namespace: not the document's item, whatever its local name
-	s := resolved_set({
-		'a.xml': '<r xmlns="urn:d"><item><name>x</name></item></r>'
-		'b.xml': '<p:r xmlns:p="urn:d" xmlns:ext="urn:e"><p:item><p:name>x</p:name></p:item><ext:item><p:name>x</p:name></ext:item></p:r>'
-	})
-	m := s.merge(parse_rules('r item key=name merge\n!local')!)!
-	root := m.root()
-	assert names_of(root) == ['item:x', 'ext:item']
-	assert root.child('item', 'x').fragment_count() == 2
+// What a local namespace names, case by case: an element of the namespace by its local name
+// however it is spelled, any other as written, in the merge, the rules, the key paths and the
+// lookups alike.
+fn test_a_local_namespace_names_its_own_elements_and_no_others() {
+	base := '<r xmlns="urn:d"><item><name>x</name></item></r>'
+	struct Case {
+		what  string
+		other string // the second document
+		rules string
+		kids  []string // the merged root's children
+		frags int      // contributions of the first child
+		probs []ProblemKind
+	}
+	cases := [
+		Case{'one namespace, spelled two ways', '<q:r xmlns:q="urn:d"><q:item><q:name>x</q:name></q:item></q:r>', 'r item key=name merge', [
+			'item:x',
+		], 2, []},
+		Case{'a prefixed element of another namespace keeps its name', '<r xmlns="urn:d" xmlns:ext="urn:e"><ext:item><name>x</name></ext:item></r>', 'r item key=name merge', [
+			'item:x',
+			'ext:item',
+		], 1, []},
+		Case{'a rule names another namespace as written', '<r xmlns="urn:d" xmlns:ext="urn:e"><ext:item><name>x</name></ext:item></r>', 'r ext:item key=name merge', [
+			'ext:item:x', // ruled children first, those no rule names after
+			'item',
+		], 1, []},
+		Case{'a key path is of the namespace too', '<q:r xmlns:q="urn:d"><q:item><q:name>x</q:name></q:item></q:r>', 'r item key=name merge', [
+			'item:x',
+		], 2, []},
+		Case{'a root of another namespace is not merged', '<r xmlns="urn:other"><item><name>x</name></item></r>', 'r item key=name merge', [
+			'item:x',
+		], 1, [.name_differs]},
+	]
+	for c in cases {
+		s := resolved_set({
+			'a.xml': base
+			'b.xml': c.other
+		})
+		m := s.merge(parse_rules(c.rules + '\n!local urn:d')!)!
+		root := m.root()
+		assert names_of(root) == c.kids, c.what
+		assert root.kids()[0].fragment_count() == c.frags, c.what
+		assert kinds(m) == c.probs, c.what
+		// child and child_id answer alike for every keyed child (one no rule names is its own)
+		for k in root.kids().filter(it.keyed()) {
+			assert root.child(k.name(), k.key()).i == k.i, c.what
+			assert root.child_id(k.tag(), k.key()).i == k.i, c.what
+		}
+	}
+	// two spellings of one rule cannot meet: a prefix names another namespace's element
+	parse_rules('r item key=name merge\nr p:item single\n!local urn:d')!
 }

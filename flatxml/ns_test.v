@@ -155,7 +155,6 @@ fn test_local_names_of_nodes_and_merged_nodes() {
 	root := m.root()
 	assert root.name() == 'p:r'
 	assert root.local_name() == 'r'
-	assert root.local_id() == rb.local_id()
 	assert Node{}.local_name() == ''
 	assert MNode{}.local_name() == ''
 }
