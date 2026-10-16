@@ -1338,12 +1338,16 @@ fn test_a_local_namespace_merges_documents_that_spell_it_differently() {
 	assert names_of(x).sorted() == ['name', 'v', 'w']
 	assert format_rules(rs)!.contains('!local urn:d\n')
 	// prefixes swapped between two documents: the same declaration names say different things,
-	// and are not compared
+	// which a caller that counts them as spelling leaves out
 	sw := resolved_set({
 		'a.xml': '<p:r xmlns:p="urn:d" xmlns:q="urn:e"><p:item><p:name>x</p:name></p:item></p:r>'
 		'b.xml': '<q:r xmlns:q="urn:d" xmlns:p="urn:e"><q:item><q:name>x</q:name></q:item></q:r>'
 	})
-	mut ms := sw.merge(parse_rules('r item key=name merge\n!local urn:d')!)!
+	assert kinds(sw.merge(parse_rules('r item key=name merge\n!local urn:d')!)!) == [
+		.value_differs,
+		.value_differs,
+	]
+	mut ms := sw.merge(parse_rules('r item key=name merge\n!local urn:d\n!ignore xmlns:p xmlns:q')!)!
 	assert ms.problems.map(ms.describe(it)) == []
 	assert ms.root().child('item', 'x').fragment_count() == 2
 }
@@ -1576,4 +1580,28 @@ fn test_a_resolved_and_an_unresolved_document_compare_attributes_as_written() {
 	s.add(mut a)
 	s.add(mut b)
 	assert kinds(s.merge(parse_rules('')!)!) == [.value_differs]
+}
+
+fn test_a_difference_no_unresolved_merge_saw_is_refused_when_written() {
+	// p:id and q:id, both of urn:d, are one attribute: an element cannot hold two. Unresolved, the
+	// merge could not tell them apart, so the writer refuses rather than keep one value in silence
+	s := set_of({
+		'a.xml': '<r xmlns:p="urn:d" p:id="1"/>'
+		'b.xml': '<r xmlns:q="urn:d" q:id="2"/>'
+	})
+	mut m := s.merge(parse_rules('')!)!
+	mut sb := strings.new_builder(64)
+	m.write(mut sb) or {
+		assert err.msg().contains('q:id') && err.msg().contains('resolve'), err.msg()
+		// the same value is one attribute, written once
+		t := set_of({
+			'a.xml': '<r xmlns:p="urn:d" p:id="1"/>'
+			'b.xml': '<r xmlns:q="urn:d" q:id="1"/>'
+		})
+		mut sb2 := strings.new_builder(64)
+		t.merge(parse_rules('')!)!.write(mut sb2)!
+		assert sb2.str().count('id="1"') == 1, sb2.str()
+		return
+	}
+	assert false, sb.str()
 }
