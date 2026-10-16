@@ -201,8 +201,13 @@ pub fn (s &DocSet) merge(rules RuleSet) !&Merged {
 		m.outs.free()
 		m.out_frags.free()
 		m.order.free()
+		m.starts.free()
+		m.fill.free()
+		m.listed.free()
 		m.runs.free()
+		m.keyed_at.free()
 		m.keys.free()
+		m.group.free()
 	}
 	return m
 }

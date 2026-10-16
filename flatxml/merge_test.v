@@ -86,6 +86,17 @@ r pkg key=n merge
 	assert m.root().child('top', '').fragment_count() == 2
 }
 
+fn test_the_scratch_is_released_once_merged() {
+	m := merged({
+		'a.xml': '<r><pkg><n>B</n><x>1</x><y>2</y></pkg><pkg><n>A</n></pkg></r>'
+		'b.xml': '<r><pkg><n>C</n></pkg><pkg><n>B</n></pkg></r>'
+	}, pkg_rules)
+	assert names_of(m.root()) == ['pkg:A', 'pkg:B', 'pkg:C']
+	assert [m.kids.cap, m.outs.cap, m.out_frags.cap, m.order.cap, m.starts.cap, m.fill.cap,
+		m.listed.cap, m.runs.cap, m.keyed_at.cap, m.keys.cap] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+	assert m.group.len == 0
+}
+
 fn test_ordered_children_keep_their_order() {
 	m := merged({
 		'a.xml': '<r><s><k>c</k></s><s><k>a</k></s><s><k>b</k></s></r>'
