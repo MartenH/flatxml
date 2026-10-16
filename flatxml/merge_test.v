@@ -1653,13 +1653,14 @@ fn test_an_ignored_spelling_in_a_later_contribution_ignores_the_attribute_in_all
 	assert kinds(resolved_set(files).merge(parse_rules('!ignore p:id')!)!) == []
 }
 
-fn test_no_root_in_the_local_namespace_is_an_empty_view() {
+fn test_no_root_in_the_local_namespace_is_refused() {
 	s := resolved_set({
 		'a.xml': '<r xmlns="urn:other"><item/></r>'
 		'b.xml': '<r xmlns="urn:other2"/>'
 	})
-	m := s.merge(parse_rules('!local urn:d')!)!
-	assert !m.root().ok()
-	assert kinds(m) == [.name_differs]
-	assert m.problems[0].at.len == 2
+	s.merge(parse_rules('!local urn:d')!) or {
+		assert err.msg().contains('urn:d') && err.msg().contains('a.xml'), err.msg()
+		return
+	}
+	assert false
 }
