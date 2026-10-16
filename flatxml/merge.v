@@ -620,13 +620,13 @@ fn (mut m Merged) keyed(p u32, rule &CRule, r u32, k int, e int) {
 	// the most there may be, keyed or not, in the order they were written
 	mut kept := missing.clone()
 	if rule.max > 0 && m.runs.len + missing.len > rule.max {
-		mut firsts := m.runs.map(order[it.lo])
+		mut firsts := m.runs.map(it.first)
 		firsts << missing
 		firsts.sort()
 		cut := firsts[rule.max - 1]
 		mut dropped := []Node{}
 		for run in m.runs {
-			if order[run.lo] > cut {
+			if run.first > cut {
 				for x in run.lo .. run.hi {
 					dropped << m.kid_node(order[x])
 				}
@@ -643,20 +643,20 @@ fn (mut m Merged) keyed(p u32, rule &CRule, r u32, k int, e int) {
 			what: m.set.tab.name(m.kids[k].tag)
 			at:   dropped
 		}
-		m.runs = m.runs.filter(order[it.lo] <= cut)
+		m.runs = m.runs.filter(it.first <= cut)
 		kept = missing.filter(it <= cut)
 	}
 	// children without a key after the others, or where they were written when order matters
 	mut x := 0
 	for run in m.runs {
-		for written && x < kept.len && kept[x] < order[run.lo] {
+		for written && x < kept.len && kept[x] < run.first {
 			m.out_one(kept[x], r, .each, '')
 			x++
 		}
 		if run.empty {
 			m.identity_of(p, rule, r, .single, '', run.lo, run.hi)
 		} else {
-			m.identity_of(p, rule, r, .keyed, keys[order[run.lo] - k], run.lo, run.hi)
+			m.identity_of(p, rule, r, .keyed, keys[run.first - k], run.lo, run.hi)
 		}
 	}
 	for x < kept.len {

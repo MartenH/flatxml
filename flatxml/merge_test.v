@@ -815,6 +815,14 @@ fn test_children_without_a_key_as_one_empty_key() {
 	}, 'r s key=@id keyless=empty merge')
 	assert lit.problems.len == 0 && names_of(lit.root()) == ['s']
 	assert lit.root().child('s', '').fragment_count() == 2
+	// where order matters, the empty key's child stays where it was first written
+	placed := {
+		'a.xml': '<r><s id="c"/><s id="b"/><t/><s/><s id="a"/></r>'
+	}
+	assert names_of(merged(placed, 'r s,t key=@id keyless=empty ordered').root()) == ['s:c',
+		's:b', 't', 's', 's:a']
+	assert names_of(merged(placed, 'r s,t key=@id keyless=empty merge\n!written').root()) == [
+		's:c', 's:b', 't', 's', 's:a']
 	// keyless is for keyed rules
 	for bad in ['r s keyless=empty', 'r s single keyless=empty'] {
 		rs := parse_rules(bad) or { panic(err) }
