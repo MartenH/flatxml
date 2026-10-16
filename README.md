@@ -338,6 +338,8 @@ each is good at, and what it is not:
 
 All numbers: an Intel Core Ultra 9 285H under WSL2, files warm in the page cache, flatxml built
 with `-prod` (GCC 13.3, `-O3 -flto`).
+flatxml's own baseline, for catching regressions between its versions, is
+[docs/performance.md](docs/performance.md) (`tools/baseline.sh --against <rev>`).
 
 **Parsing a large document.** A 500 MB document from `cmd/genxml`: 12.6M elements and 12.3M
 attributes, an element every 41 bytes. Speed per byte depends on that density, so compare files
