@@ -1429,3 +1429,16 @@ fn test_a_local_namespace_names_its_own_elements_and_no_others() {
 	// two spellings of one rule cannot meet: a prefix names another namespace's element
 	parse_rules('r item key=name merge\nr p:item single\n!local urn:d')!
 }
+
+fn test_a_document_of_another_namespace_listed_first_is_not_the_root() {
+	s := resolved_set({
+		'0.xml': '<r xmlns="urn:other"><item><name>z</name></item></r>'
+		'a.xml': local_a
+		'b.xml': local_b
+	})
+	m := s.merge(parse_rules('r item key=name merge\n!local urn:d')!)!
+	root := m.root()
+	assert root.fragment_count() == 2
+	assert names_of(root) == ['item:x', 'item:y']
+	assert kinds(m) == [.name_differs]
+}
