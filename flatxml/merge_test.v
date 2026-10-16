@@ -804,6 +804,13 @@ fn test_children_without_a_key_as_one_empty_key() {
 	assert kinds(merged(files, 'r s,t key=@id merge')).filter(it == .missing_key).len == 4
 	rs := parse_rules('r s key=@id keyless=empty') or { panic(err) }
 	assert rs.rules[0].keyless == .empty
+	// quiet: each its own, as by default, and not reported
+	quiet := merged(files, 'r s,t key=@id keyless=quiet merge')
+	assert kinds(quiet).filter(it == .missing_key).len == 0
+	assert names_of(quiet.root()) == names_of(merged(files, 'r s,t key=@id merge').root())
+	for text in ['r s key=@id keyless=quiet merge', 'r s key=@id keyless=empty merge'] {
+		assert format_rules(parse_rules(text) or { panic(err) }) or { panic(err) } == text + '\n'
+	}
 	if _ := parse_rules('r s key=@id keyless=one') {
 		assert false
 	}
