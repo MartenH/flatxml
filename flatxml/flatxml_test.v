@@ -218,6 +218,17 @@ fn test_positions_from_many_threads() {
 	assert results[0][2000] == '<string>:2001:1'
 }
 
+fn test_free_releases_the_line_index() {
+	mut d := must('<a>\n<b/>\n</a>')
+	assert d.pos(2) == '<string>:2:1'
+	assert d.lines != unsafe { nil }
+	d.free()
+	assert d.lines == unsafe { nil }
+	mut e := must('<a/>')
+	e.free() // never asked for a position: nothing to release
+	assert e.lines == unsafe { nil }
+}
+
 fn test_errors_name_the_position() {
 	assert fails('<a><b></a>') == '<string>:1:7: end tag </a> does not match <b> at 1:4'
 	assert fails('<a>\n<b>').contains('<string>:2:1: element <b> is not closed')
