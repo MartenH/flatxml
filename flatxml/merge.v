@@ -514,7 +514,8 @@ fn (mut m Merged) keyed(p u32, rule &CRule, r u32, k int, e int) {
 		missing.clear()
 	}
 	order := m.order
-	if rule.ordered {
+	written := rule.ordered || m.rules.written
+	if written {
 		m.runs.sort_with_compare(fn [order] (a &Run, b &Run) int {
 			return order[a.lo] - order[b.lo]
 		})
@@ -562,7 +563,7 @@ fn (mut m Merged) keyed(p u32, rule &CRule, r u32, k int, e int) {
 	// children without a key after the others, or where they were written when order matters
 	mut x := 0
 	for run in m.runs {
-		for rule.ordered && x < kept.len && kept[x] < order[run.lo] {
+		for written && x < kept.len && kept[x] < order[run.lo] {
 			m.out_one(kept[x], r, .each, '')
 			x++
 		}

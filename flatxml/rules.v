@@ -103,11 +103,14 @@ pub struct RuleSet {
 pub:
 	rules        []Rule
 	fold         bool     // keys compared ignoring ASCII case
+	ignore_attrs []string // attributes whose values may differ between contributions to a node
+	classify     ?ClassFn // the class of a parent, for rules that name one (`%class`)
 	// element names compared without their prefix: `p:x` and `x` are one name, and a rule, a key
 	// path and a merged node name the local name. The set's namespaces must be resolved.
 	local_names bool
-	ignore_attrs []string // attributes whose values may differ between contributions to a node
-	classify     ?ClassFn // the class of a parent, for rules that name one (`%class`)
+	// the identities of an aggregation in the order first written, as an ordered rule has them,
+	// without requiring an ordered rule's children to come from one document
+	written_order bool
 }
 
 enum RuleKind as u8 {
@@ -140,6 +143,7 @@ struct CompiledRules {
 	rules    []CRule
 	fold     bool
 	local    bool // element names compared without their prefix
+	written  bool // identities in the order first written
 	ignore   []u32 // ids of the attributes not compared
 	classify ?ClassFn
 mut:
@@ -182,8 +186,9 @@ fn any_name(s string) bool {
 // refused.
 fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 	mut out := CompiledRules{
-		fold:  rs.fold
-		local: rs.local_names
+		fold:    rs.fold
+		local:   rs.local_names
+		written: rs.written_order
 	}
 	mut seen := map[string]int{}
 	mut rules := []CRule{cap: rs.rules.len}
@@ -280,6 +285,7 @@ fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 		ignore:   ignore
 		classify: rs.classify
 		local:    rs.local_names
+		written:  rs.written_order
 	}
 }
 
@@ -508,6 +514,7 @@ fn own_key_text(c Node) string {
 //   # a comment; blank lines are ignored
 //   !fold                   keys are compared ignoring ASCII case
 //   !local                  element names compared without their prefix (namespaces resolved)
+//   !written                an aggregation's identities in the order first written
 //   !ignore <attr>...       attributes whose values may differ between contributions
 //   <parent> <child>[,<child>...] [key=<path>[,<path>...]] [keyless=own|empty|quiet] [single] [merge]
 //                           [ordered] [max=<n>]
@@ -519,7 +526,7 @@ fn own_key_text(c Node) string {
 // rule. Rules are listed in the order their children are written.
 pub fn parse_rules(text string) !RuleSet {
 	mut rules := []Rule{}
-	mut fold, mut local := false, false
+	mut fold, mut local, mut written := false, false, false
 	mut ignore := []string{}
 	for n, raw in text.split_into_lines() {
 		line := raw.all_before('#').trim_space()
@@ -543,6 +550,12 @@ pub fn parse_rules(text string) !RuleSet {
 						return error('line ${n + 1}: `!local` takes nothing')
 					}
 					local = true
+				}
+				'!written' {
+					if words.len > 1 {
+						return error('line ${n + 1}: `!written` takes nothing')
+					}
+					written = true
 				}
 				else {
 					return error('line ${n + 1}: unknown setting `${words[0]}`')
@@ -599,7 +612,8 @@ pub fn parse_rules(text string) !RuleSet {
 		rules:        rules
 		fold:         fold
 		ignore_attrs: ignore
-		local_names:  local
+		local_names:   local
+		written_order: written
 	}
 }
 
@@ -617,6 +631,9 @@ pub fn format_rules(rs RuleSet) !string {
 	}
 	if rs.local_names {
 		lines << '!local'
+	}
+	if rs.written_order {
+		lines << '!written'
 	}
 	if rs.ignore_attrs.len > 0 {
 		for a in rs.ignore_attrs {

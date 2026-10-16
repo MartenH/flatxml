@@ -96,6 +96,19 @@ fn test_ordered_children_keep_their_order() {
 	assert names_of(u.root()) == ['s:a', 's:b', 's:c']
 }
 
+fn test_written_order_keeps_identities_as_first_written_across_documents() {
+	files := {
+		'a.xml': '<r><s><k>c</k></s><t/><s><k>a</k></s></r>'
+		'b.xml': '<r><s><k>b</k></s><s><k>c</k></s></r>'
+	}
+	mut m := merged(files, 'r s,t key=k merge\n!written')
+	// as first written, an unkeyed one in its place, and nothing refused for coming from two files
+	assert names_of(m.root()) == ['s:c', 't', 's:a', 's:b']
+	assert m.root().child('s', 'c').fragment_count() == 2
+	assert kinds(m) == [.missing_key]
+	assert format_rules(parse_rules('!written')!)! == '!written\n'
+}
+
 fn test_keys_compared_ignoring_case() {
 	files := {
 		'a.xml': '<r><s><k>Abc</k></s></r>'
