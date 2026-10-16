@@ -258,6 +258,13 @@ fn test_xml_special_attrs_is_built_in() {
 	// the group through a grandparent: still one use
 	g := compile('<xs:import namespace="http://www.w3.org/XML/1998/namespace" schemaLocation="xml.xsd"/><xs:complexType name="A"><xs:simpleContent><xs:extension base="xs:string"><xs:attributeGroup ref="xml:specialAttrs"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="B"><xs:simpleContent><xs:extension base="t:A"/></xs:simpleContent></xs:complexType><xs:complexType name="C"><xs:simpleContent><xs:extension base="t:B"><xs:attributeGroup ref="xml:specialAttrs"/></xs:extension></xs:simpleContent></xs:complexType>')!
 	assert g.complex_types[g.complex_type_named(tns, 'C')?].attrs.len == 4
+	// the group nested in another on one side: still one use, either way round
+	for wrap_base in [true, false] {
+		b_ref := if wrap_base { 't:W' } else { 'xml:specialAttrs' }
+		d_ref := if wrap_base { 'xml:specialAttrs' } else { 't:W' }
+		n := compile('<xs:import namespace="http://www.w3.org/XML/1998/namespace" schemaLocation="xml.xsd"/><xs:attributeGroup name="W"><xs:attributeGroup ref="xml:specialAttrs"/></xs:attributeGroup><xs:complexType name="B"><xs:simpleContent><xs:extension base="xs:string"><xs:attributeGroup ref="${b_ref}"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="D"><xs:simpleContent><xs:extension base="t:B"><xs:attributeGroup ref="${d_ref}"/></xs:extension></xs:simpleContent></xs:complexType>')!
+		assert n.complex_types[n.complex_type_named(tns, 'D')?].attrs.len == 4
+	}
 	// two IDs in one type, xml:id among them, are refused
 	assert fails('<xs:complexType name="X"><xs:attribute name="key" type="xs:ID"/><xs:attributeGroup ref="xml:specialAttrs"/></xs:complexType>').contains('are both IDs')
 	assert fails('<xs:attribute name="a" type="xs:string"/><xs:complexType name="B"><xs:simpleContent><xs:extension base="xs:string"><xs:attribute ref="t:a"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="D"><xs:simpleContent><xs:extension base="t:B"><xs:attribute ref="t:a"/><xs:attribute ref="t:a"/></xs:extension></xs:simpleContent></xs:complexType>').contains('appears twice in type')

@@ -97,6 +97,8 @@ pub struct AttrUse {
 pub:
 	decl     u32
 	required bool
+mut:
+	group bool // the type has it through an attribute group, not written in it
 }
 
 pub enum ParticleKind {
