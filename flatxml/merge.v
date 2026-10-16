@@ -726,8 +726,8 @@ fn (mut m Merged) differs(n u32) {
 					d0.attr_tag[a] == d.attr_tag[b]
 				}
 				if same {
-					// ignored by either spelling of the one attribute
-					if d0.attr_tag[a] in m.rules.ignore {
+					// ignored by any name of the one attribute, as written or expanded, in either
+					if d0.attr_tag[a] in m.rules.ignore || d0.attr_id(a) in m.rules.ignore {
 						break
 					}
 					if d0.attr_value(a) != d.attr_value(b) {
