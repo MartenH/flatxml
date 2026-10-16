@@ -847,7 +847,7 @@ fn verdicts(s &Schema, root string, kids []string) (bool, bool) {
 		body += '<${k}/>'
 	}
 	mut d := flatxml.parse_string('<${root} xmlns="urn:test">${body}</${root}>') or { panic(err) }
-	mut vr := new_validator(mut d, s, Options{}) or { panic(err) }
+	mut vr := new_validator(mut d, new_checker(s, Options{})) or { panic(err) }
 	i := d.root()
 	decl := vr.match_element(i, flatxml.no_node) or { panic('${root} is not declared') }
 	ct := s.elements[decl].typ.idx
@@ -923,4 +923,34 @@ fn test_review_cases_for_content_models() {
 	}
 	dup := fails('<xs:element name="g" id="y" type="xs:string"/><xs:import namespace="urn:imp" schemaLocation="imp.xsd"/><xs:element name="h" id="y" type="xs:string"/>')
 	assert dup.contains('"y"'), dup
+}
+
+// one checker over many documents finds in each what a fresh validation finds: what it keeps of
+// the schema between documents (indexes, automata, first sets) changes no answer
+fn test_a_checker_reused_finds_what_a_fresh_one_does() {
+	s := compile(vschema)!
+	docs := [
+		ok_doc.replace('<qty>2</qty>', '<qty>two</qty>'),
+		ok_doc,
+		ok_doc.replace(' sku="x"', '').replace('<id>A1</id>', '<id>A1</id><stray/>'),
+		ok_doc.replace('state="new"', 'state="new" bogus="1"'),
+		ok_doc,
+		ok_doc.replace('<note>some <b>bold</b> text</note>', ''),
+	]
+	for order in [docs, docs.reverse()] {
+		mut c := new_checker(s, Options{})
+		for k, text in order {
+			mut d1 := flatxml.parse_string(text)!
+			fresh := validate(mut d1, s)!
+			mut d2 := flatxml.parse_string(text)!
+			reused := c.validate(mut d2)!
+			assert reused.findings.map('${it.node} ${it.kind} ${it.msg}') == fresh.findings.map('${it.node} ${it.kind} ${it.msg}'), 'document ${k}'
+			assert reused.total == fresh.total
+		}
+	}
+	mut c := new_checker(s, Options{})
+	mut d := flatxml.parse_string(docs[0])!
+	assert !c.validate(mut d)!.valid()
+	mut e := flatxml.parse_string(ok_doc)!
+	assert c.validate(mut e)!.valid()
 }
