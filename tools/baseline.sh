@@ -10,7 +10,7 @@
 #   validate   8 MB and 500 MB against testdata/inventory.xsd, the whole process
 #   merge      10 files (5 x 8 MB, 5 x 1 MB, the same ids, so every node has several
 #              contributions) merged by keyed rules
-# Each prints the best and the median of N runs, and the largest peak memory. With --against REV
+# Each prints the best and the median of N runs (default 8), and the largest peak memory. With --against REV
 # the same measurements run for REV too, built from a temporary worktree, and the merged output of
 # the two is compared byte for byte. The exit status is nonzero when a measurement fails, when
 # this build cannot write the merged view, or when the two merged views differ. The two builds take turns, in the opposite order each round:
@@ -18,7 +18,7 @@
 # about 0.95 s and 1.25 s with the same binary), and a fixed order puts every slow run on one build.
 # Absolute numbers move with the compiler and the machine; compare two builds measured together.
 set -euo pipefail
-against='' runs=7 work=/tmp/flatxml_baseline
+against='' runs=8 work=/tmp/flatxml_baseline
 while [ $# -gt 0 ]; do
 	case $1 in
 	--against) against=$2; shift 2 ;;
@@ -27,6 +27,14 @@ while [ $# -gt 0 ]; do
 	*) echo "usage: tools/baseline.sh [--against REV] [--runs N] [--workdir DIR]" >&2; exit 2 ;;
 	esac
 done
+if ! [[ $runs =~ ^[1-9][0-9]*$ ]]; then
+	echo "baseline.sh: --runs must be a positive integer" >&2
+	exit 2
+fi
+if [ -n "$against" ] && [ $((runs % 2)) -ne 0 ]; then
+	echo "baseline.sh: with --against, --runs must be even (each build first in half the rounds)" >&2
+	exit 2
+fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(realpath -m "$work")
 mkdir -p "$work"
@@ -65,6 +73,8 @@ device settings single merge
 settings setting key=@key merge
 device * single merge
 EOF
+# the ten files by name: the CLI reads a directory recursively, and the workdir may hold others
+parts=("$work"/parts/{a,b}{1,2,3,4,5}.xml)
 xsd="$root/testdata/inventory.xsd"
 
 # one <build> <what>: run it once, print "<ms> <peak KB>"; the time is the one the tool reports,
@@ -77,7 +87,7 @@ one() {
 	ns) out=$( { /usr/bin/time -f 'rss %M' "$work/$b-cli" stats "$work/gen_500.xml"; } 2>&1 ) || rc=$? ;;
 	validate8 | validate500)
 		out=$( { /usr/bin/time -f 'wall %e rss %M' "$work/$b-cli" validate "$xsd" "$work/gen_${what#validate}.xml"; } 2>&1 ) || rc=$? ;;
-	merge) out=$( { /usr/bin/time -f 'rss %M' "$work/$b-cli" merge --rules "$work/rules.txt" --problems 3 "$work/parts/"; } 2>&1 ) || rc=$? ;;
+	merge) out=$( { /usr/bin/time -f 'rss %M' "$work/$b-cli" merge --rules "$work/rules.txt" --problems 3 "${parts[@]}"; } 2>&1 ) || rc=$? ;;
 	esac
 	if [ "$rc" -ne 0 ]; then
 		printf '%s %s exited %d:\n%s\n' "$b" "$what" "$rc" "$out" >&2
@@ -125,14 +135,14 @@ if [ -n "$against" ]; then
 	rm -f "$work/merged-now.xml" "$work/merged-then.xml"
 	# an older build may not write a merged view at all (its usage has no `-o OUT`); this one
 	# must, and a build that can must write the same bytes
-	if ! out=$("$work/now-cli" merge --rules "$work/rules.txt" -o "$work/merged-now.xml" "$work/parts/" 2>&1); then
+	if ! out=$("$work/now-cli" merge --rules "$work/rules.txt" -o "$work/merged-now.xml" "${parts[@]}" 2>&1); then
 		printf 'merged output: this build failed to write it:\n%s\n' "$out" >&2
 		exit 1
 	fi
 	usage=$("$work/then-cli" 2>&1 || true)
 	if ! grep -q -- '-o OUT' <<< "$usage"; then
 		echo 'merged output: not compared (that build cannot write a merged view)'
-	elif ! out=$("$work/then-cli" merge --rules "$work/rules.txt" -o "$work/merged-then.xml" "$work/parts/" 2>&1); then
+	elif ! out=$("$work/then-cli" merge --rules "$work/rules.txt" -o "$work/merged-then.xml" "${parts[@]}" 2>&1); then
 		printf 'merged output: that build failed to write it:\n%s\n' "$out" >&2
 		exit 1
 	elif cmp -s "$work/merged-then.xml" "$work/merged-now.xml"; then

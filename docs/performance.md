@@ -12,7 +12,8 @@ tools/baseline.sh                          # this tree alone
 
 It builds with `-prod`, writes its documents with `cmd/genxml` into `--workdir` (default
 `/tmp/flatxml_baseline`, reused between runs) and prints, for each measurement, the best and the
-median of `--runs` runs (default 7; for an even count the mean of the middle two) and the largest peak memory of the whole process:
+median of `--runs` runs (default 8, and even with `--against`, so each build runs first in half
+the rounds; the median of an even count is the mean of the middle two) and the largest peak memory of the whole process:
 
 | measurement | what is timed |
 |---|---|
