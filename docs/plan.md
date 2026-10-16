@@ -103,7 +103,8 @@ a real schema needs it, with its own tests.
    from its `schemaLocation` when that is a local file; otherwise it is skipped with a note (the
    location is a hint), and a reference into its namespace fails as undeclared. A document's
    `xsi:schemaLocation` is reported to the caller and never fetched. The attributes of the xml
-   namespace are built in, for schemas that refer to them without importing their schema.
+   namespace and its attribute group `xml:specialAttrs` are built in, for schemas that refer to
+   them without importing their schema.
 
 ## Verification
 
