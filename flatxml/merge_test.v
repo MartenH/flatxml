@@ -1518,3 +1518,37 @@ fn test_attributes_are_told_by_their_expanded_names() {
 		assert kinds(t.merge(parse_rules(rules + '\n!ignore {urn:d}id')!)!) == [], rules
 	}
 }
+
+fn test_rules_name_an_expanded_name_whatever_its_uri_holds() {
+	// an http URI holds `/`, an RDF one `#`: inside braces neither splits a path or starts a comment
+	s := resolved_set({
+		'a.xml': '<r xmlns="urn:d" xmlns:e="http://x/e#"><e:item e:id="k"><e:v>1</e:v></e:item></r>'
+		'b.xml': '<r xmlns="urn:d"><item xmlns="http://x/e#" xmlns:f="http://x/e#" f:id="k"><v>1</v></item></r>'
+	})
+	rs := parse_rules('r {http://x/e#}item key=@{http://x/e#}id merge # by its id\n{http://x/e#}item {http://x/e#}v single merge\n!local urn:d')!
+	m := s.merge(rs)!
+	assert m.problems.len == 0
+	assert names_of(m.root()) == ['{http://x/e#}item:k']
+	assert m.root().kids()[0].fragment_count() == 2
+	// and it is written back as it is read
+	assert parse_rules(format_rules(rs)!)!.rules.map(it.children) == rs.rules.map(it.children)
+	// whatever local namespace format_rules writes reads back as it was (V's fields() splits at
+	// space, tab and line breaks only, so \v and \f are inside a field), and one it cannot is refused
+	odd := RuleSet{
+		local_ns: 'urn:a\vurn:b'
+	}
+	assert parse_rules(format_rules(odd)!)!.local_ns == odd.local_ns
+	format_rules(RuleSet{
+		local_ns: 'urn:a urn:b'
+	}) or { return }
+	assert false
+}
+
+fn test_a_difference_is_named_by_identity_not_spelling() {
+	s := resolved_set({
+		'a.xml': '<p:r xmlns:p="urn:d" p:id="1"/>'
+		'b.xml': '<q:r xmlns:q="urn:d" q:id="2"/>'
+	})
+	m := s.merge(parse_rules('!local urn:d')!)!
+	assert m.problems.map(it.what) == ['@{urn:d}id']
+}
