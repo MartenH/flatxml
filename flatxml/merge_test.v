@@ -1572,14 +1572,24 @@ fn test_an_attribute_ignored_by_one_spelling_is_ignored_in_either_order() {
 	}
 }
 
-fn test_a_resolved_and_an_unresolved_document_compare_attributes_as_written() {
-	mut a := parse_bytes('<r xmlns:p="urn:d" p:id="1"/>'.bytes(), 'a.xml') or { panic(err) }
-	a.resolve_namespaces() or { panic(err) }
-	mut b := parse_bytes('<r xmlns:p="urn:d" p:id="2"/>'.bytes(), 'b.xml') or { panic(err) }
-	mut s := DocSet.new()
-	s.add(mut a)
-	s.add(mut b)
-	assert kinds(s.merge(parse_rules('')!)!) == [.value_differs]
+fn test_a_set_mixing_resolved_and_unresolved_documents_is_refused() {
+	for first_resolved in [true, false] {
+		mut a := parse_bytes('<r xmlns:p="urn:d" p:id="1"/>'.bytes(), 'a.xml') or { panic(err) }
+		mut b := parse_bytes('<r xmlns:p="urn:d" p:id="2"/>'.bytes(), 'b.xml') or { panic(err) }
+		if first_resolved {
+			a.resolve_namespaces() or { panic(err) }
+		} else {
+			b.resolve_namespaces() or { panic(err) }
+		}
+		mut s := DocSet.new()
+		s.add(mut a)
+		s.add(mut b)
+		s.merge(parse_rules('')!) or {
+			assert err.msg().contains('b.xml') && err.msg().contains('resolve every document'), err.msg()
+			continue
+		}
+		assert false, first_resolved.str()
+	}
 }
 
 fn test_a_difference_no_unresolved_merge_saw_is_refused_when_written() {
@@ -1606,41 +1616,6 @@ fn test_a_difference_no_unresolved_merge_saw_is_refused_when_written() {
 	assert false, sb.str()
 }
 
-// One resolved and one unresolved document, in both orders: an expanded ignore holds either way,
-// and a difference the merge does not compare is refused when written, never dropped.
-fn test_a_mixed_resolution_set_ignores_and_writes_alike_in_either_order() {
-	p := '<r xmlns:p="urn:d" p:id="1"/>'
-	q := '<r xmlns:p="urn:d" p:id="2"/>'
-	for first_resolved in [true, false] {
-		mut a := parse_bytes(p.bytes(), 'a.xml') or { panic(err) }
-		mut b := parse_bytes(q.bytes(), 'b.xml') or { panic(err) }
-		if first_resolved {
-			a.resolve_namespaces() or { panic(err) }
-		} else {
-			b.resolve_namespaces() or { panic(err) }
-		}
-		mut s := DocSet.new()
-		s.add(mut a)
-		s.add(mut b)
-		assert kinds(s.merge(parse_rules('!ignore {urn:d}id')!)!) == [], first_resolved.str()
-		mut m := s.merge(parse_rules('')!)!
-		assert kinds(m) == [.value_differs], first_resolved.str()
-	}
-	// the writer: resolved p:id="1", unresolved q:id="2" of one URI is refused, not dropped
-	mut a := parse_bytes('<r xmlns:p="urn:d" p:id="1"/>'.bytes(), 'a.xml') or { panic(err) }
-	a.resolve_namespaces() or { panic(err) }
-	mut b := parse_bytes('<r xmlns:q="urn:d" q:id="2"/>'.bytes(), 'b.xml') or { panic(err) }
-	mut s := DocSet.new()
-	s.add(mut a)
-	s.add(mut b)
-	mut m := s.merge(parse_rules('')!)!
-	mut sb := strings.new_builder(64)
-	m.write(mut sb) or {
-		assert err.msg().contains('q:id'), err.msg()
-		return
-	}
-	assert false, sb.str()
-}
 
 fn test_an_attribute_a_later_fragment_brings_is_compared_with_later_ones() {
 	// the first fragment has no id; the second brings it, the third differs from the second

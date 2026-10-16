@@ -133,6 +133,17 @@ pub fn (s &DocSet) merge(rules RuleSet) !&Merged {
 			}
 		}
 	}
+	// one reading of names for every document: a resolved document's prefixes are bound, an
+	// unresolved one's are only spellings, and an attribute of one cannot be told to be or not to
+	// be the other's. So every document resolved, or none
+	if s.docs.len > 1 {
+		r0 := s.docs[0].ns.len == s.docs[0].tag.len
+		for d in s.docs[1..] {
+			if (d.ns.len == d.tag.len) != r0 {
+				return error('${d.path}: its namespaces are ${if r0 { 'not' } else { '' }} resolved and ${s.docs[0].path}\'s are${if r0 { '' } else { ' not' }}; resolve every document of the set, or none'.replace('  ', ' '))
+			}
+		}
+	}
 	mut m := &Merged{
 		set:     s
 		rules:   rules.compile(s.tab)!
@@ -782,8 +793,7 @@ struct Held {
 }
 
 // same_attr reports whether attribute a of d0 and b of d are one attribute: by expanded name when
-// both documents are resolved, by name as written otherwise (one resolved and one not share no
-// reading of a prefix).
+// the documents are resolved, by name as written when they are not (a merge takes all or none).
 fn same_attr(d0 &Doc, a u32, d &Doc, b u32) bool {
 	if d0.attr_ns.len == d0.attr_tag.len && d.attr_ns.len == d.attr_tag.len {
 		return d0.attr_id(a) == d.attr_id(b)
