@@ -131,8 +131,15 @@ fn (mut r Reader) finish(ct u32) ! {
 		return error('type ${r.ct_name(ct)} extends ${r.ct_name(base)}, which has no simple content')
 	}
 	r.s.complex_types[ct].simple = r.s.complex_types[base].simple
-	// a use the base already has (one attribute group referred to by both) is one use
-	r.s.complex_types[ct].attrs = union_of(r.s.complex_types[base].attrs, r.s.complex_types[ct].attrs)
+	// a use the base already has as it is (one attribute group referred to by both) is one use;
+	// one that differs from it is the attribute twice, which check_unique_attrs refuses
+	mut attrs := r.s.complex_types[base].attrs.clone()
+	for u in r.s.complex_types[ct].attrs {
+		if u !in r.s.complex_types[base].attrs {
+			attrs << u
+		}
+	}
+	r.s.complex_types[ct].attrs = attrs
 	r.ct_state[ct] = 2
 }
 

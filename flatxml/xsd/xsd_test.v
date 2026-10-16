@@ -252,6 +252,8 @@ fn test_xml_special_attrs_is_built_in() {
 	e := compile('<xs:import namespace="http://www.w3.org/XML/1998/namespace" schemaLocation="xml.xsd"/><xs:complexType name="B"><xs:simpleContent><xs:extension base="xs:string"><xs:attributeGroup ref="xml:specialAttrs"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="D"><xs:simpleContent><xs:extension base="t:B"><xs:attributeGroup ref="xml:specialAttrs"/></xs:extension></xs:simpleContent></xs:complexType>')!
 	assert e.complex_types[e.complex_type_named(tns, 'D')?].attrs.len == 4
 	assert e.attribute_groups.last().own == 4
+	// the same attribute, optional in the base and required in the extension, is refused
+	assert fails('<xs:attribute name="a" type="xs:string"/><xs:complexType name="B"><xs:simpleContent><xs:extension base="xs:string"><xs:attribute ref="t:a"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="D"><xs:simpleContent><xs:extension base="t:B"><xs:attribute ref="t:a" use="required"/></xs:extension></xs:simpleContent></xs:complexType>').contains('appears twice in type')
 	assert fails('<xs:complexType name="X"><xs:attributeGroup ref="xml:other"/></xs:complexType>').contains('attribute group {http://www.w3.org/XML/1998/namespace}other is not declared')
 }
 
