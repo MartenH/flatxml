@@ -93,7 +93,8 @@ fn test_the_scratch_is_released_once_merged() {
 	}, pkg_rules)
 	assert names_of(m.root()) == ['pkg:A', 'pkg:B', 'pkg:C']
 	assert [m.kids.cap, m.outs.cap, m.out_frags.cap, m.order.cap, m.starts.cap, m.fill.cap,
-		m.listed.cap, m.runs.cap, m.keyed_at.cap, m.keys.cap] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+		m.listed.cap, m.runs.cap, m.keyed_at.cap, m.keys.cap, m.missing.cap, m.kid_sort.cap,
+		m.held.cap, m.ignore_ids.cap] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 	assert m.group.len == 0
 }
 
@@ -199,6 +200,15 @@ fn test_mixed_text_that_differs_is_reported() {
 	assert kinds(m) == [.value_differs]
 	assert m.problems[0].at.map(it.doc.path) == ['a.xml', 'b.xml']
 	assert m.root().child('d', '').text() == 'one  two'
+}
+
+fn test_text_alone_then_text_among_elements_is_the_same_text() {
+	m := merged({
+		'a.xml': '<r><p>text</p></r>'
+		'b.xml': '<r><p>text<c/></p></r>'
+	}, 'r p single merge\np c single merge')
+	assert m.problems.len == 0
+	assert m.root().child('p', '').child('c', '').ok()
 }
 
 fn test_mixed_content_that_differs_inside_a_child_is_reported() {
