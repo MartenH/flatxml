@@ -70,14 +70,19 @@ xsd="$root/testdata/inventory.xsd"
 # one <build> <what>: run it once, print "<ms> <peak KB>"; the time is the one the tool reports,
 # or the wall time for a whole-process measurement
 one() {
-	local b=$1 what=$2 out
+	local b=$1 what=$2 out rc=0
 	case $what in
-	parse) out=$( { /usr/bin/time -f 'rss %M' "$work/$b-harness" "$work/gen_500.xml"; } 2>&1 ) ;;
-	ns) out=$( { /usr/bin/time -f 'rss %M' "$work/$b-cli" stats "$work/gen_500.xml"; } 2>&1 ) ;;
+	# the command's own status, checked: set -e does not hold inside a function called by ||
+	parse) out=$( { /usr/bin/time -f 'rss %M' "$work/$b-harness" "$work/gen_500.xml"; } 2>&1 ) || rc=$? ;;
+	ns) out=$( { /usr/bin/time -f 'rss %M' "$work/$b-cli" stats "$work/gen_500.xml"; } 2>&1 ) || rc=$? ;;
 	validate8 | validate500)
-		out=$( { /usr/bin/time -f 'wall %e rss %M' "$work/$b-cli" validate "$xsd" "$work/gen_${what#validate}.xml"; } 2>&1 ) ;;
-	merge) out=$( { /usr/bin/time -f 'rss %M' "$work/$b-cli" merge --rules "$work/rules.txt" --problems 3 "$work/parts/"; } 2>&1 ) ;;
+		out=$( { /usr/bin/time -f 'wall %e rss %M' "$work/$b-cli" validate "$xsd" "$work/gen_${what#validate}.xml"; } 2>&1 ) || rc=$? ;;
+	merge) out=$( { /usr/bin/time -f 'rss %M' "$work/$b-cli" merge --rules "$work/rules.txt" --problems 3 "$work/parts/"; } 2>&1 ) || rc=$? ;;
 	esac
+	if [ "$rc" -ne 0 ]; then
+		printf '%s %s exited %d:\n%s\n' "$b" "$what" "$rc" "$out" >&2
+		return 1
+	fi
 	local ms
 	case $what in
 	parse) ms=$(sed -n 's/^flatxml: \([0-9.]*\) ms.*/\1/p' <<< "$out") ;;
@@ -117,14 +122,19 @@ for what in parse ns validate8 validate500 merge; do
 done
 
 if [ -n "$against" ]; then
-	rm -f "$work"/merged-*.xml
-	# an older build may not write a merged view at all; this one must, and the same bytes
+	rm -f "$work/merged-now.xml" "$work/merged-then.xml"
+	# an older build may not write a merged view at all (its usage has no `-o OUT`); this one
+	# must, and a build that can must write the same bytes
 	if ! out=$("$work/now-cli" merge --rules "$work/rules.txt" -o "$work/merged-now.xml" "$work/parts/" 2>&1); then
 		printf 'merged output: this build failed to write it:\n%s\n' "$out" >&2
 		exit 1
 	fi
-	if ! "$work/then-cli" merge --rules "$work/rules.txt" -o "$work/merged-then.xml" "$work/parts/" > /dev/null 2>&1; then
+	usage=$("$work/then-cli" 2>&1 || true)
+	if ! grep -q -- '-o OUT' <<< "$usage"; then
 		echo 'merged output: not compared (that build cannot write a merged view)'
+	elif ! out=$("$work/then-cli" merge --rules "$work/rules.txt" -o "$work/merged-then.xml" "$work/parts/" 2>&1); then
+		printf 'merged output: that build failed to write it:\n%s\n' "$out" >&2
+		exit 1
 	elif cmp -s "$work/merged-then.xml" "$work/merged-now.xml"; then
 		echo 'merged output: the same'
 	else
