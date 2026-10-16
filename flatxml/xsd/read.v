@@ -45,8 +45,9 @@ mut:
 	ids        map[string]bool   // the id attributes of the XSD elements of the document being read
 	pending    []Pending
 	ct_agroups map[u32][]u32 // complex type -> attribute groups it references
-	// complex type -> its uses (use_key) that came through an attribute group, inherited ones too
-	ct_from_group map[u32]map[u64]bool
+	// complex type -> its uses (use_key) that came through an attribute group, inherited ones
+	// too, each with where it is written (origin_of)
+	ct_from_group map[u32]map[u64]u64
 	ct_base    map[u32]u32   // complex type -> the complex type its simple content extends
 	ct_state   []u8          // finish: 0 not yet, 1 in progress, 2 done
 	agroup_ord map[u64]u32   // attribute group references made so far, per owner

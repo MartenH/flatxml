@@ -99,13 +99,13 @@ fn (mut r Reader) resolve() ! {
 		r.flatten(u32(g))!
 	}
 	for ct in 0 .. r.s.complex_types.len {
-		mut from := map[u64]bool{}
+		mut from := map[u64]u64{}
 		for g in r.ct_agroups[u32(ct)] or { []u32{} } {
 			// joined as union_of joins, recording the uses it keeps
 			for u in r.flatten(g)! {
 				if !r.s.complex_types[ct].attrs.any(it.decl == u.decl) {
 					r.s.complex_types[ct].attrs << u
-					from[use_key(u)] = true
+					from[use_key(u)] = r.origin_of(g, u.decl) or { 0 }
 				}
 			}
 		}
@@ -140,16 +140,16 @@ fn (mut r Reader) finish(ct u32) ! {
 		return error('type ${r.ct_name(ct)} extends ${r.ct_name(base)}, which has no simple content')
 	}
 	r.s.complex_types[ct].simple = r.s.complex_types[base].simple
-	// a use both have through attribute groups (one group, however nested, referred to by both)
-	// is one use, once; any other use the base has too, written in either, is the attribute
-	// twice, which check_unique_attrs refuses
+	// a use both have through attribute groups from the one place it is written (a group,
+	// however nested, referred to by both) is one use, once; any other use the base has too is
+	// the attribute twice, which check_unique_attrs refuses
 	mut attrs := r.s.complex_types[base].attrs.clone()
-	inherited := (r.ct_from_group[base] or { map[u64]bool{} }).clone()
-	own := (r.ct_from_group[ct] or { map[u64]bool{} }).clone()
+	inherited := (r.ct_from_group[base] or { map[u64]u64{} }).clone()
+	own := (r.ct_from_group[ct] or { map[u64]u64{} }).clone()
 	mut joined := map[u64]bool{}
 	for u in r.s.complex_types[ct].attrs {
 		k := use_key(u)
-		if k in own && k in inherited && k !in joined {
+		if k in own && k in inherited && own[k] == inherited[k] && k !in joined {
 			joined[k] = true
 			continue
 		}
@@ -158,12 +158,30 @@ fn (mut r Reader) finish(ct u32) ! {
 	r.s.complex_types[ct].attrs = attrs
 	if inherited.len > 0 {
 		mut from := inherited.clone()
-		for k, _ in own {
-			from[k] = true
+		for k, o in own {
+			from[k] = o
 		}
 		r.ct_from_group[ct] = from
 	}
 	r.ct_state[ct] = 2
+}
+
+// origin_of is where the use of decl that group g gives is written: the group, nested or not,
+// and its place there, in the order flatten joins them (the group's own uses, then each it
+// refers to), so the use the group keeps.
+fn (r &Reader) origin_of(g u32, decl u32) ?u64 {
+	ag := r.agroups[g]
+	for i in 0 .. int(ag.own) {
+		if ag.attrs[i].decl == decl {
+			return u64(g) << 32 | u64(i)
+		}
+	}
+	for sub in ag.refs {
+		if o := r.origin_of(sub, decl) {
+			return o
+		}
+	}
+	return none
 }
 
 fn use_key(u AttrUse) u64 {
@@ -368,23 +386,25 @@ fn (r &Reader) visit(p u32, mut state []u8) ! {
 fn (r &Reader) check_unique_attrs(ct u32) ! {
 	attrs := r.s.complex_types[ct].attrs
 	mut seen := map[u64]bool{}
-	mut id := ''
+	mut id := no_id
 	for u in attrs {
 		k := r.s.attributes[u.decl].name.key()
-		name := r.s.qname(r.s.attributes[u.decl].name)
 		if k in seen {
+			name := r.s.qname(r.s.attributes[u.decl].name)
 			return error('attribute ${name} appears twice in type ${r.ct_name(ct)}')
 		}
 		seen[k] = true
 		// at most one attribute of a type is an ID
 		if r.is_id(r.s.attributes[u.decl].typ) {
-			if id != '' {
-				return error('attributes ${id} and ${name} of type ${r.ct_name(ct)} are both IDs')
+			if id != no_id {
+				return error('attributes ${r.s.qname(r.s.attributes[id].name)} and ${r.s.qname(r.s.attributes[u.decl].name)} of type ${r.ct_name(ct)} are both IDs')
 			}
-			id = name
+			id = u.decl
 		}
 	}
 }
+
+const no_id = u32(0xFFFF_FFFF)
 
 // is_id reports whether a type is xs:ID or derived from it.
 fn (r &Reader) is_id(t TypeRef) bool {
