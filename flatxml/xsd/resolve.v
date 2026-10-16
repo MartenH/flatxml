@@ -101,13 +101,13 @@ fn (mut r Reader) resolve() ! {
 	for ct in 0 .. r.s.complex_types.len {
 		mut from := map[u64]bool{}
 		for g in r.ct_agroups[u32(ct)] or { []u32{} } {
-			attrs := r.flatten(g)!
-			for u in attrs {
+			// joined as union_of joins, recording the uses it keeps
+			for u in r.flatten(g)! {
 				if !r.s.complex_types[ct].attrs.any(it.decl == u.decl) {
+					r.s.complex_types[ct].attrs << u
 					from[use_key(u)] = true
 				}
 			}
-			r.s.complex_types[ct].attrs = union_of(r.s.complex_types[ct].attrs, attrs)
 		}
 		if from.len > 0 {
 			r.ct_from_group[u32(ct)] = from.clone()
