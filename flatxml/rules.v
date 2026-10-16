@@ -295,8 +295,9 @@ fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 	}
 }
 
-// no_local marks compiled rules with no local namespace.
-const no_local = u32(0xFFFF_FFFF)
+// no_local is the local namespace id of rules with none: Doc.name_in then names every element
+// as written.
+pub const no_local = u32(0xFFFF_FFFF)
 
 // local_ns_id is the id of the local namespace in the table: no_local for none, and for a URI no
 // document declares, an id no element has.
