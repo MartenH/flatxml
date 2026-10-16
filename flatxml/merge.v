@@ -720,8 +720,20 @@ fn (mut m Merged) differs(n u32) {
 			if m.rules.local != no_local && d.is_ns_decl(b) {
 				continue
 			}
+			// one identity for both: expanded names when both documents are resolved, else names
+			// as written (one resolved and one not have no common reading of a prefix)
+			both := d0.attr_ns.len == d0.attr_tag.len && d.attr_ns.len == d.attr_tag.len
 			for a := a_lo; a < a_hi; a++ {
-				if d0.attr_id(a) == d.attr_id(b) {
+				same := if both {
+					d0.attr_id(a) == d.attr_id(b)
+				} else {
+					d0.attr_tag[a] == d.attr_tag[b]
+				}
+				if same {
+					// ignored by either spelling of the one attribute
+					if d0.attr_tag[a] in m.rules.ignore {
+						break
+					}
 					if d0.attr_value(a) != d.attr_value(b) {
 						m.problems << Problem{
 							kind: .value_differs

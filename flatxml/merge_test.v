@@ -1552,3 +1552,28 @@ fn test_a_difference_is_named_by_identity_not_spelling() {
 	m := s.merge(parse_rules('!local urn:d')!)!
 	assert m.problems.map(it.what) == ['@{urn:d}id']
 }
+
+fn test_an_attribute_ignored_by_one_spelling_is_ignored_in_either_order() {
+	a := '<r xmlns="urn:d" xmlns:p="urn:d" p:id="1"/>'
+	b := '<r xmlns="urn:d" xmlns:q="urn:d" q:id="2"/>'
+	for files in [{
+		'a.xml': a
+		'b.xml': b
+	}, {
+		'a.xml': b
+		'b.xml': a
+	}] {
+		s := resolved_set(files)
+		assert kinds(s.merge(parse_rules('!ignore p:id')!)!) == []
+	}
+}
+
+fn test_a_resolved_and_an_unresolved_document_compare_attributes_as_written() {
+	mut a := parse_bytes('<r xmlns:p="urn:d" p:id="1"/>'.bytes(), 'a.xml') or { panic(err) }
+	a.resolve_namespaces() or { panic(err) }
+	mut b := parse_bytes('<r xmlns:p="urn:d" p:id="2"/>'.bytes(), 'b.xml') or { panic(err) }
+	mut s := DocSet.new()
+	s.add(mut a)
+	s.add(mut b)
+	assert kinds(s.merge(parse_rules('')!)!) == [.value_differs]
+}

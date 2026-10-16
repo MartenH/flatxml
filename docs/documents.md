@@ -68,7 +68,7 @@ annotations are kept for that), but none is needed.
    not single (a keyed or each child, or the root), so a single child (a wrapper) is transparent to
    keys. The rules' order is the order of their aggregations among a node's children. `parse_rules`
    reads them from text, one per line (`ITEMS ITEM key=NAME merge`), with the set's settings on
-   lines that start with `!`, which no element name can (`!fold`, `!ignore ID`, `!local URI`: the elements of one namespace named by their local name, every other as written, `!written`: identities in the order first written); a key part `.` is
+   lines that start with `!`, which no element name can (`!fold`, `!ignore ID`, `!local URI`: the elements of one namespace named by their local name, every other by its expanded name `{uri}local`, `!written`: identities in the order first written); a key part `.` is
    the child's own text (`key=.,@kind`), which no element name can spell either. `format_rules`
    writes a rule set back as that text. Read back, it is the same set, but for spellings that
    compile alike, each written as one: the parent '' as `*`, no child names or [''] as `*` (read
