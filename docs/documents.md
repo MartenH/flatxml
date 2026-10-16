@@ -52,8 +52,9 @@ annotations are kept for that), but none is needed.
      separator text cannot hold (`REFS/REF+`); a key is shown with its parts joined by `,` and the
      occurrences of a part by `|`. With `merge`, children of one key (from any files) are one
      child; without, the second is a collision. A child missing every part of its key is, per rule
-     (`keyless`), reported and kept as a child of its own, or the one child of its name with the
-     empty key, which merges like a single child and, like one, is transparent to keys below it;
+     (`keyless`), reported and kept as a child of its own (`own`, the default), kept as one without
+     a report (`quiet`, for rules under which children without a key are expected), or the one
+     child of its name with the empty key, which merges like a single child and, like one, is transparent to keys below it;
      there, a key with no text in any part is the empty key too, as an absent one is;
    - **single**: one child of each name, identified by its name, so the occurrences in every
      fragment of the parent are one child (with `merge`; without, the second is a collision);
