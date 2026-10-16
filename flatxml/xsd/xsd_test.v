@@ -253,7 +253,13 @@ fn test_xml_special_attrs_is_built_in() {
 	assert e.complex_types[e.complex_type_named(tns, 'D')?].attrs.len == 4
 	assert e.attribute_groups.last().own == 4
 	// the same attribute, optional in the base and required in the extension, is refused, and so
-	// is one the extension refers to twice
+	// is one the extension refers to twice, and one each writes
+	assert fails('<xs:attribute name="a" type="xs:string"/><xs:complexType name="B"><xs:simpleContent><xs:extension base="xs:string"><xs:attribute ref="t:a"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="D"><xs:simpleContent><xs:extension base="t:B"><xs:attribute ref="t:a"/></xs:extension></xs:simpleContent></xs:complexType>').contains('appears twice in type')
+	// the group through a grandparent: still one use
+	g := compile('<xs:import namespace="http://www.w3.org/XML/1998/namespace" schemaLocation="xml.xsd"/><xs:complexType name="A"><xs:simpleContent><xs:extension base="xs:string"><xs:attributeGroup ref="xml:specialAttrs"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="B"><xs:simpleContent><xs:extension base="t:A"/></xs:simpleContent></xs:complexType><xs:complexType name="C"><xs:simpleContent><xs:extension base="t:B"><xs:attributeGroup ref="xml:specialAttrs"/></xs:extension></xs:simpleContent></xs:complexType>')!
+	assert g.complex_types[g.complex_type_named(tns, 'C')?].attrs.len == 4
+	// two IDs in one type, xml:id among them, are refused
+	assert fails('<xs:complexType name="X"><xs:attribute name="key" type="xs:ID"/><xs:attributeGroup ref="xml:specialAttrs"/></xs:complexType>').contains('are both IDs')
 	assert fails('<xs:attribute name="a" type="xs:string"/><xs:complexType name="B"><xs:simpleContent><xs:extension base="xs:string"><xs:attribute ref="t:a"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="D"><xs:simpleContent><xs:extension base="t:B"><xs:attribute ref="t:a"/><xs:attribute ref="t:a"/></xs:extension></xs:simpleContent></xs:complexType>').contains('appears twice in type')
 	assert fails('<xs:attribute name="a" type="xs:string"/><xs:complexType name="B"><xs:simpleContent><xs:extension base="xs:string"><xs:attribute ref="t:a"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="D"><xs:simpleContent><xs:extension base="t:B"><xs:attribute ref="t:a" use="required"/></xs:extension></xs:simpleContent></xs:complexType>').contains('appears twice in type')
 	assert fails('<xs:complexType name="X"><xs:attributeGroup ref="xml:other"/></xs:complexType>').contains('attribute group {http://www.w3.org/XML/1998/namespace}other is not declared')

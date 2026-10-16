@@ -131,18 +131,34 @@ fn (mut r Reader) finish(ct u32) ! {
 		return error('type ${r.ct_name(ct)} extends ${r.ct_name(base)}, which has no simple content')
 	}
 	r.s.complex_types[ct].simple = r.s.complex_types[base].simple
-	// a use the base already has as it is (one attribute group referred to by both) is one use,
-	// once; one that differs from it, or a second of the extension's own, is the attribute twice,
-	// which check_unique_attrs refuses
+	// a use that reaches both through one attribute group (the extension's and an ancestor's
+	// reference to it) is one use, once; any other use the base has too, written in either or
+	// from different groups, is the attribute twice, which check_unique_attrs refuses
 	mut attrs := r.s.complex_types[base].attrs.clone()
 	mut inherited := map[u64]bool{}
 	for u in attrs {
 		inherited[use_key(u)] = true
 	}
+	mut ancestor_groups := map[u32]bool{}
+	mut b := base
+	for {
+		for g in r.ct_agroups[b] or { []u32{} } {
+			ancestor_groups[g] = true
+		}
+		b = r.ct_base[b] or { break }
+	}
+	mut through_group := map[u64]bool{}
+	for g in r.ct_agroups[ct] or { []u32{} } {
+		if g in ancestor_groups {
+			for u in r.agroups[g].attrs {
+				through_group[use_key(u)] = true
+			}
+		}
+	}
 	mut joined := map[u64]bool{}
 	for u in r.s.complex_types[ct].attrs {
 		k := use_key(u)
-		if k in inherited && k !in joined {
+		if k in inherited && k in through_group && k !in joined {
 			joined[k] = true
 			continue
 		}
@@ -354,13 +370,30 @@ fn (r &Reader) visit(p u32, mut state []u8) ! {
 fn (r &Reader) check_unique_attrs(ct u32) ! {
 	attrs := r.s.complex_types[ct].attrs
 	mut seen := map[u64]bool{}
+	mut id := ''
 	for u in attrs {
 		k := r.s.attributes[u.decl].name.key()
+		name := r.s.qname(r.s.attributes[u.decl].name)
 		if k in seen {
-			name := r.s.qname(r.s.attributes[u.decl].name)
 			return error('attribute ${name} appears twice in type ${r.ct_name(ct)}')
 		}
 		seen[k] = true
+		// at most one attribute of a type is an ID
+		if r.is_id(r.s.attributes[u.decl].typ) {
+			if id != '' {
+				return error('attributes ${id} and ${name} of type ${r.ct_name(ct)} are both IDs')
+			}
+			id = name
+		}
+	}
+}
+
+// is_id reports whether a type is xs:ID or derived from it.
+fn (r &Reader) is_id(t TypeRef) bool {
+	return match t.kind {
+		.builtin { t.idx == u32(Builtin.id) }
+		.simple { r.s.simple_types[t.idx].root == .id }
+		else { false }
 	}
 }
 
