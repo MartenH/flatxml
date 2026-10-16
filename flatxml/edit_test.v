@@ -598,6 +598,13 @@ fn same(mut w Doc, wi u32, t &TM, src &Doc) ! {
 	}
 }
 
+// kept_lists_hold checks that every child list the edit set keeps is the one `kids` builds.
+fn kept_lists_hold(e &Edit) {
+	for p, l in e.kid_lists {
+		assert l == e.kids(p), 'the kept child list of ${p}'
+	}
+}
+
 fn test_random_edit_sets() {
 	mut r := Rng{0x9E3779B97F4A7C15}
 	mut cases := 0
@@ -614,6 +621,7 @@ fn test_random_edit_sets() {
 		count := 1 + r.n(8)
 		for _ in 0 .. count {
 			apply_random(mut r, mut e, mut root, mut gone, other)!
+			kept_lists_hold(e)
 			ops++
 		}
 		out := e.xml()
@@ -690,6 +698,7 @@ fn test_a_diff_applied_by_an_edit_set_gives_the_new_document() {
 		mut gone := []&TM{}
 		for _ in 0 .. 1 + r.n(6) {
 			apply_random(mut r, mut e0, mut model, mut gone, other)!
+			kept_lists_hold(e0)
 		}
 		mut b := doc_of(e0.xml())
 		b.resolve_namespaces()!
@@ -698,6 +707,7 @@ fn test_a_diff_applied_by_an_edit_set_gives_the_new_document() {
 			continue // the root replaced
 		}
 		e := apply(diff, a)!
+		kept_lists_hold(e)
 		out := e.xml()
 		mut w := doc_of(out)
 		w.resolve_namespaces()!
@@ -796,4 +806,18 @@ fn test_many_inserts_and_attributes() {
 	}
 	out := e2.xml()
 	assert out.starts_with('<r a1="x" a3="x"') && !out.contains('a0=') && out.ends_with(' a499="x"/>')
+}
+
+fn test_an_element_put_back_where_it_was_is_in_the_kept_list() {
+	d := doc_of('<r><a/><b/></r>')
+	mut e := d.edit()
+	r := e.root()
+	e.insert(r, 2, '<c/>')!
+	a := r.children()[0]
+	e.remove(a)!
+	kept_lists_hold(e)
+	e.unlift(a.key)
+	kept_lists_hold(e)
+	e.insert(r, 3, '<d/>')!
+	assert e.xml() == '<r><a/><b/><c/><d/></r>'
 }
