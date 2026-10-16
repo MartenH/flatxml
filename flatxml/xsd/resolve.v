@@ -99,12 +99,18 @@ fn (mut r Reader) resolve() ! {
 		r.flatten(u32(g))!
 	}
 	for ct in 0 .. r.s.complex_types.len {
+		mut from := map[u64]bool{}
 		for g in r.ct_agroups[u32(ct)] or { []u32{} } {
-			attrs := r.flatten(g)!.map(AttrUse{
-				...it
-				group: true
-			})
+			attrs := r.flatten(g)!
+			for u in attrs {
+				if !r.s.complex_types[ct].attrs.any(it.decl == u.decl) {
+					from[use_key(u)] = true
+				}
+			}
 			r.s.complex_types[ct].attrs = union_of(r.s.complex_types[ct].attrs, attrs)
+		}
+		if from.len > 0 {
+			r.ct_from_group[u32(ct)] = from.clone()
 		}
 	}
 	// Then what it inherits from a type it extends, and a check for an attribute twice.
@@ -138,22 +144,25 @@ fn (mut r Reader) finish(ct u32) ! {
 	// is one use, once; any other use the base has too, written in either, is the attribute
 	// twice, which check_unique_attrs refuses
 	mut attrs := r.s.complex_types[base].attrs.clone()
-	mut inherited := map[u64]bool{}
-	for u in attrs {
-		if u.group {
-			inherited[use_key(u)] = true
-		}
-	}
+	inherited := (r.ct_from_group[base] or { map[u64]bool{} }).clone()
+	own := (r.ct_from_group[ct] or { map[u64]bool{} }).clone()
 	mut joined := map[u64]bool{}
 	for u in r.s.complex_types[ct].attrs {
 		k := use_key(u)
-		if u.group && k in inherited && k !in joined {
+		if k in own && k in inherited && k !in joined {
 			joined[k] = true
 			continue
 		}
 		attrs << u
 	}
 	r.s.complex_types[ct].attrs = attrs
+	if inherited.len > 0 {
+		mut from := inherited.clone()
+		for k, _ in own {
+			from[k] = true
+		}
+		r.ct_from_group[ct] = from
+	}
 	r.ct_state[ct] = 2
 }
 
