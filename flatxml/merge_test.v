@@ -1357,3 +1357,33 @@ fn test_local_names_need_namespaces_resolved() {
 	}
 	assert false
 }
+
+fn test_local_names_take_rules_spelled_with_a_prefix() {
+	s := resolved_set({
+		'a.xml': local_a
+		'b.xml': local_b
+	})
+	// the rules spell the names as one document does; with local names they are local names
+	m := s.merge(parse_rules('p:r p:item key=p:name merge\np:item p:name,v,p:w single merge\n!local')!)!
+	assert m.problems.len == 0
+	root := m.root()
+	assert names_of(root) == ['item:x', 'item:y']
+	assert root.child('p:item', 'x').fragment_count() == 2
+	assert names_of(root.child('item', 'x')).sorted() == ['name', 'v', 'w']
+}
+
+fn test_a_view_knows_whether_every_document_was_resolved() {
+	mut a := parse_bytes(local_a.bytes(), 'a.xml') or { panic(err) }
+	a.resolve_namespaces() or { panic(err) }
+	mut b := parse_bytes(local_b.bytes(), 'b.xml') or { panic(err) }
+	mut s := DocSet.new()
+	s.add(mut a)
+	s.add(mut b)
+	// resolving a split the shared table's names; b is still unresolved, so local names are not
+	// to be had from this view
+	m := s.merge(parse_rules('')!)!
+	assert !m.resolved
+	assert !names_resolved(m)
+	b.resolve_namespaces() or { panic(err) }
+	assert names_resolved(m)
+}

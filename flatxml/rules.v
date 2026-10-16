@@ -230,7 +230,9 @@ fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 			path := if at < 0 { p } else { p[..at] }
 			// an attribute no document has gets an id no attribute has
 			attr := if at < 0 { no_name } else { t.id(p[at + 1..]) or { no_name - 1 } }
-			parts << KeyPart{t.path(path), attr, all, false}
+			// with local names, a path is of local names, however the rule spells them
+			kpath := if rs.local_names { path.split('/').map(local_part(it)).join('/') } else { path }
+			parts << KeyPart{t.path(kpath), attr, all, false}
 		}
 		mut kind := RuleKind.each
 		if keyed {
@@ -262,13 +264,13 @@ fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 				return error('rules ${prev + 1} and ${k + 1} both name ${pair}')
 			}
 			seen[pair] = k
-			sel := out.selector(parent, t, rs.classify != none) or {
+			sel := out.selector(parent, t, rs.classify != none, rs.local_names) or {
 				if err.msg() != '' {
 					return error('rule ${k + 1}: ${err.msg()}')
 				}
 				continue
 			}
-			cid := if c == '*' { u32(0) } else { t.id(c) or { continue } }
+			cid := if c == '*' { u32(0) } else { t.id(rule_name(c, rs.local_names)) or { continue } }
 			out.pairs[pair_key(sel, cid)] = u32(k)
 		}
 	}
@@ -289,9 +291,21 @@ fn (rs &RuleSet) compile(t &Names) !CompiledRules {
 	}
 }
 
+// rule_name is an element name as a rule compares it: without its prefix with local names, where
+// the merge names every element by its local name.
+fn rule_name(name string, local bool) string {
+	return if local { local_part(name) } else { name }
+}
+
+// local_part is a name without its prefix, sharing its bytes.
+fn local_part(name string) string {
+	c := name.last_index_u8(`:`)
+	return if c < 0 { name } else { unsafe { tos(name.str + c + 1, name.len - c - 1) } }
+}
+
 // selector is the selector of a parent as a rule names it, made the first time it is named: an
 // error with no message when it names an element no document has (the rule applies to nothing).
-fn (mut cr CompiledRules) selector(parent string, t &Names, classifies bool) !u32 {
+fn (mut cr CompiledRules) selector(parent string, t &Names, classifies bool, local bool) !u32 {
 	if parent == '*' {
 		return 0
 	}
@@ -315,7 +329,7 @@ fn (mut cr CompiledRules) selector(parent string, t &Names, classifies bool) !u3
 	}
 	mut ids := []u32{}
 	for nm in names.reverse() {
-		ids << t.id(nm) or { return error('') }
+		ids << t.id(rule_name(nm, local)) or { return error('') }
 	}
 	if ids.len == 1 {
 		if id := cr.by_name[ids[0]] {
