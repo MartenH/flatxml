@@ -96,6 +96,13 @@ fn test_the_scratch_is_released_once_merged() {
 		m.listed.cap, m.runs.cap, m.keyed_at.cap, m.keys.cap, m.missing.cap, m.kid_sort.cap,
 		m.held.cap, m.ignore_ids.cap] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 	assert m.group.len == 0
+	// a child without its key, children out of rule order, attributes and an ignored one
+	w := merged({
+		'a.xml': '<r><pkg u="1" v="1"><n>B</n><y>2</y><x>1</x></pkg><pkg/></r>'
+		'b.xml': '<r><pkg u="2" v="1"><n>B</n></pkg></r>'
+	}, '!ignore u\n' + pkg_rules)
+	assert kinds(w) == [.missing_key]
+	assert [w.missing.cap, w.kid_sort.cap, w.held.cap, w.ignore_ids.cap] == [0, 0, 0, 0]
 }
 
 fn test_ordered_children_keep_their_order() {

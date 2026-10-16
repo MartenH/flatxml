@@ -388,9 +388,7 @@ fn (mut m Merged) expand(p u32) {
 	// by aggregation, in the order the rules are listed (none last), then as written
 	if !sorted {
 		m.kid_sort.clear()
-		for j in 0 .. m.nkids {
-			m.kid_sort << m.kids[j]
-		}
+		m.kid_sort << m.kids[..m.nkids]
 		m.kid_sort.sort_with_compare(compare_kid_rule)
 		for j, kid in m.kid_sort {
 			put(m.kids, j, kid)
@@ -779,6 +777,7 @@ fn (mut m Merged) differs(n u32) {
 	// them: otherwise the text is the one run, and comparing the texts needs no list of runs
 	mut t0 := []TextRun{}
 	mut t0_read := false
+	s0 := n0.text()
 	a_lo, a_hi := d0.attr_range(f0.i)
 	// an attribute any contribution spells by an ignored name is ignored in all of them: the
 	// identities of the ignored spellings, collected before anything is compared
@@ -812,9 +811,9 @@ fn (mut m Merged) differs(n u32) {
 			t0_read = true
 		}
 		differ := if mixed {
-			nf.text_runs() != t0 || nf.text() != n0.text()
+			nf.text_runs() != t0 || nf.text() != s0
 		} else {
-			nf.text() != n0.text()
+			nf.text() != s0
 		}
 		if differ {
 			m.problems << Problem{
