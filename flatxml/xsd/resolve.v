@@ -131,16 +131,29 @@ fn (mut r Reader) finish(ct u32) ! {
 		return error('type ${r.ct_name(ct)} extends ${r.ct_name(base)}, which has no simple content')
 	}
 	r.s.complex_types[ct].simple = r.s.complex_types[base].simple
-	// a use the base already has as it is (one attribute group referred to by both) is one use;
-	// one that differs from it is the attribute twice, which check_unique_attrs refuses
+	// a use the base already has as it is (one attribute group referred to by both) is one use,
+	// once; one that differs from it, or a second of the extension's own, is the attribute twice,
+	// which check_unique_attrs refuses
 	mut attrs := r.s.complex_types[base].attrs.clone()
+	mut inherited := map[u64]bool{}
+	for u in attrs {
+		inherited[use_key(u)] = true
+	}
+	mut joined := map[u64]bool{}
 	for u in r.s.complex_types[ct].attrs {
-		if u !in r.s.complex_types[base].attrs {
-			attrs << u
+		k := use_key(u)
+		if k in inherited && k !in joined {
+			joined[k] = true
+			continue
 		}
+		attrs << u
 	}
 	r.s.complex_types[ct].attrs = attrs
 	r.ct_state[ct] = 2
+}
+
+fn use_key(u AttrUse) u64 {
+	return u64(u.decl) << 1 | u64(u.required)
 }
 
 fn (r &Reader) ct_name(ct u32) string {
