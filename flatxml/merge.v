@@ -217,11 +217,22 @@ fn (mut m Merged) build() {
 	// a document of another namespace listed first does not decide what the others merge into
 	mut first := 0
 	if m.rules.local != no_local {
+		first = -1
 		for k, d in s.docs {
 			if d.ns[1] == m.rules.local {
 				first = k
 				break
 			}
+		}
+		if first < 0 {
+			// no root is in the namespace: there is nothing of it to merge
+			m.problems << Problem{
+				kind: .name_differs
+				node: 0
+				what: s.tab.name(s.docs[0].tag[1])
+				at:   s.docs.map(it.root_node())
+			}
+			return
 		}
 	}
 	root_tag := m.name_of(s.docs[first], 1)
@@ -698,6 +709,20 @@ fn (mut m Merged) differs(n u32) {
 	t0 := n0.text_runs()
 	mixed0 := d0.has_text_children(f0.i)
 	a_lo, a_hi := d0.attr_range(f0.i)
+	// an attribute any contribution spells by an ignored name is ignored in all of them: the
+	// identities of the ignored spellings, collected before anything is compared
+	mut ignored := map[u32]bool{}
+	if m.rules.ignore.len > 0 {
+		for f in m.frags[lo..hi] {
+			d := m.set.docs[f.doc]
+			x_lo, x_hi := d.attr_range(f.i)
+			for x := x_lo; x < x_hi; x++ {
+				if d.attr_tag[x] in m.rules.ignore || d.attr_id(x) in m.rules.ignore {
+					ignored[d.attr_id(x)] = true
+				}
+			}
+		}
+	}
 	mut held := []Held{cap: int(a_hi - a_lo)}
 	for a := a_lo; a < a_hi; a++ {
 		held << Held{d0, f0.i, a}
@@ -717,7 +742,7 @@ fn (mut m Merged) differs(n u32) {
 		}
 		b_lo, b_hi := d.attr_range(f.i)
 		for b := b_lo; b < b_hi; b++ {
-			if d.attr_tag[b] in m.rules.ignore || d.attr_id(b) in m.rules.ignore {
+			if d.attr_tag[b] in m.rules.ignore || d.attr_id(b) in ignored {
 				continue
 			}
 			// the first fragment that has this attribute, which a later one is compared with: the
@@ -728,8 +753,7 @@ fn (mut m Merged) differs(n u32) {
 					continue
 				}
 				found = true
-				// ignored by any name of the one attribute, as written or expanded, in either
-				if h.doc.attr_tag[h.a] in m.rules.ignore || h.doc.attr_id(h.a) in m.rules.ignore {
+				if h.doc.attr_tag[h.a] in m.rules.ignore || h.doc.attr_id(h.a) in ignored {
 					break
 				}
 				if h.doc.attr_value(h.a) != d.attr_value(b) {

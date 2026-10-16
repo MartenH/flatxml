@@ -1655,3 +1655,36 @@ fn test_an_attribute_a_later_fragment_brings_is_compared_with_later_ones() {
 		assert m.problems[0].at.map(it.doc.path) == ['b.xml', 'c.xml'], rules
 	}
 }
+
+fn test_an_unbound_prefix_is_its_own_attribute_when_written() {
+	// unresolved, p unbound: p:id is not id, and both are written
+	s := set_of({
+		'a.xml': '<r id="1"/>'
+		'b.xml': '<r p:id="1"/>'
+	})
+	mut m := s.merge(parse_rules('')!)!
+	mut sb := strings.new_builder(64)
+	m.write(mut sb)!
+	out := sb.str()
+	assert out.contains(' id="1"') && out.contains('p:id="1"'), out
+}
+
+fn test_an_ignored_spelling_in_a_later_contribution_ignores_the_attribute_in_all() {
+	files := {
+		'a.xml': '<r xmlns="urn:d" xmlns:q="urn:d" q:id="1"/>'
+		'b.xml': '<r xmlns="urn:d" xmlns:r="urn:d" r:id="2"/>'
+		'c.xml': '<r xmlns="urn:d" xmlns:p="urn:d" p:id="3"/>'
+	}
+	assert kinds(resolved_set(files).merge(parse_rules('!ignore p:id')!)!) == []
+}
+
+fn test_no_root_in_the_local_namespace_is_an_empty_view() {
+	s := resolved_set({
+		'a.xml': '<r xmlns="urn:other"><item/></r>'
+		'b.xml': '<r xmlns="urn:other2"/>'
+	})
+	m := s.merge(parse_rules('!local urn:d')!)!
+	assert !m.root().ok()
+	assert kinds(m) == [.name_differs]
+	assert m.problems[0].at.len == 2
+}
