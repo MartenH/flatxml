@@ -240,6 +240,17 @@ fn test_xml_attributes_are_built_in() {
 	assert fails('<xs:complexType name="X"><xs:attribute ref="xml:other"/></xs:complexType>').contains('attribute {http://www.w3.org/XML/1998/namespace}other is not declared')
 }
 
+// the XML namespace's attribute group: its four attributes, declared once whoever refers to them
+fn test_xml_special_attrs_is_built_in() {
+	s := compile('<xs:import namespace="http://www.w3.org/XML/1998/namespace" schemaLocation="xml.xsd"/><xs:complexType name="X"><xs:attributeGroup ref="xml:specialAttrs"/></xs:complexType><xs:complexType name="Y"><xs:attribute ref="xml:lang"/><xs:attributeGroup ref="xml:specialAttrs"/></xs:complexType>')!
+	x := s.complex_types[s.complex_type_named(tns, 'X')?]
+	assert x.attrs.map(s.names[s.attributes[it.decl].name.local]) == ['base', 'lang', 'space', 'id']
+	assert x.attrs.all(s.uris[s.attributes[it.decl].name.ns] == xml_ns_uri && !it.required)
+	y := s.complex_types[s.complex_type_named(tns, 'Y')?]
+	assert y.attrs.len == 4 && y.attrs[0].decl == x.attrs[1].decl
+	assert fails('<xs:complexType name="X"><xs:attributeGroup ref="xml:other"/></xs:complexType>').contains('attribute group {http://www.w3.org/XML/1998/namespace}other is not declared')
+}
+
 // a schema importing the XML namespace's schema document, which may sit beside it (and use what
 // this reader does not support, a default on an attribute): the built-in attributes are used
 fn test_an_import_of_the_xml_namespace_uses_the_built_in_attributes() {

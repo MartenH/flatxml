@@ -60,7 +60,9 @@ fn (mut r Reader) resolve() ! {
 			}
 			.agroup_ref {
 				g := r.s.attr_groups[p.name.key()] or {
-					return r.at(p, 'attribute group ${r.s.qname(p.name)} is not declared')
+					r.xml_agroup(p) or {
+						return r.at(p, 'attribute group ${r.s.qname(p.name)} is not declared')
+					}
 				}
 				if p.in_group {
 					r.agroups[p.slot].refs << g
@@ -379,6 +381,34 @@ fn (mut r Reader) xml_attr(q QName) ?u32 {
 	}
 	r.s.global_attrs[q.key()] = idx
 	return idx
+}
+
+// xml_agroup declares the xml namespace's attribute group, xml:specialAttrs, for a schema that
+// refers to it without importing its schema: xml:base, xml:lang, xml:space and xml:id, as that
+// schema has it.
+fn (mut r Reader) xml_agroup(p Pending) ?u32 {
+	q := p.name
+	if r.s.uris[q.ns] != xml_ns_uri || r.s.names[q.local] != 'specialAttrs' {
+		return none
+	}
+	mut attrs := []AttrUse{}
+	for name in ['base', 'lang', 'space', 'id'] {
+		a := QName{q.ns, r.s.intern_name(name)}
+		decl := r.s.global_attrs[a.key()] or { r.xml_attr(a)? }
+		attrs << AttrUse{
+			decl: decl
+		}
+	}
+	g := u32(r.agroups.len)
+	r.agroups << AttrGroup{
+		name:  q
+		attrs: attrs
+		own:   u32(attrs.len)
+		doc:   p.doc
+		node:  p.node
+	}
+	r.s.attr_groups[q.key()] = g
+	return g
 }
 
 fn (r &Reader) at(p Pending, msg string) IError {
