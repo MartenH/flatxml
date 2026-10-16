@@ -1387,3 +1387,15 @@ fn test_a_view_knows_whether_every_document_was_resolved() {
 	b.resolve_namespaces() or { panic(err) }
 	assert names_resolved(m)
 }
+
+fn test_local_names_keep_another_namespace_apart() {
+	// <ext:item> is in another namespace: not the document's item, whatever its local name
+	s := resolved_set({
+		'a.xml': '<r xmlns="urn:d"><item><name>x</name></item></r>'
+		'b.xml': '<p:r xmlns:p="urn:d" xmlns:ext="urn:e"><p:item><p:name>x</p:name></p:item><ext:item><p:name>x</p:name></ext:item></p:r>'
+	})
+	m := s.merge(parse_rules('r item key=name merge\n!local')!)!
+	root := m.root()
+	assert names_of(root) == ['item:x', 'ext:item']
+	assert root.child('item', 'x').fragment_count() == 2
+}

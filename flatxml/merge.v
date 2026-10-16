@@ -197,11 +197,10 @@ fn (mut m Merged) fit() {
 	}
 }
 
-// name_of is the name id element i of d is merged by: its local name's with local names.
+// name_of is the name id element i of d is merged by: with local names, its local name's.
 @[inline]
 fn (m &Merged) name_of(d &Doc, i u32) u32 {
-	t := d.tag[i]
-	return if m.rules.local && t != text_tag { d.tab.local[t] } else { t }
+	return if m.rules.local { d.local_tag(i) } else { d.tag[i] }
 }
 
 // build makes the merged root, then the children of every merged node in turn.

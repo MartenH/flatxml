@@ -106,7 +106,9 @@ pub:
 	ignore_attrs []string // attributes whose values may differ between contributions to a node
 	classify     ?ClassFn // the class of a parent, for rules that name one (`%class`)
 	// element names compared without their prefix: `p:x` and `x` are one name, and a rule, a key
-	// path and a merged node name the local name. The set's namespaces must be resolved.
+	// path and a merged node name the local name. That is for an element in its document's own
+	// namespace (the root's); one in another namespace keeps its name as written. The set's
+	// namespaces must be resolved.
 	local_names bool
 	// the identities of an aggregation in the order first written, as an ordered rule has them,
 	// without requiring an ordered rule's children to come from one document
