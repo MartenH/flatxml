@@ -131,9 +131,8 @@ fn (mut r Reader) finish(ct u32) ! {
 		return error('type ${r.ct_name(ct)} extends ${r.ct_name(base)}, which has no simple content')
 	}
 	r.s.complex_types[ct].simple = r.s.complex_types[base].simple
-	mut attrs := r.s.complex_types[base].attrs.clone()
-	attrs << r.s.complex_types[ct].attrs
-	r.s.complex_types[ct].attrs = attrs
+	// a use the base already has (one attribute group referred to by both) is one use
+	r.s.complex_types[ct].attrs = union_of(r.s.complex_types[base].attrs, r.s.complex_types[ct].attrs)
 	r.ct_state[ct] = 2
 }
 
@@ -345,6 +344,10 @@ fn (r &Reader) check_unique_attrs(ct u32) ! {
 	}
 }
 
+// xml_attr_names are the xml namespace's attributes, in the order its schema's xml:specialAttrs
+// lists them; xml_attr declares each.
+const xml_attr_names = ['base', 'lang', 'space', 'id']
+
 // xml_attr declares one of the xml namespace's attributes for a schema that refers to it without
 // importing its schema, as processors do: xml:lang (as a string, since the namespace's schema
 // also allows ''), xml:space (default or preserve), xml:base and xml:id.
@@ -385,14 +388,14 @@ fn (mut r Reader) xml_attr(q QName) ?u32 {
 
 // xml_agroup declares the xml namespace's attribute group, xml:specialAttrs, for a schema that
 // refers to it without importing its schema: xml:base, xml:lang, xml:space and xml:id, as that
-// schema has it.
+// schema has it. It is placed where it is first referred to, since no document declares it.
 fn (mut r Reader) xml_agroup(p Pending) ?u32 {
 	q := p.name
 	if r.s.uris[q.ns] != xml_ns_uri || r.s.names[q.local] != 'specialAttrs' {
 		return none
 	}
 	mut attrs := []AttrUse{}
-	for name in ['base', 'lang', 'space', 'id'] {
+	for name in xml_attr_names {
 		a := QName{q.ns, r.s.intern_name(name)}
 		decl := r.s.global_attrs[a.key()] or { r.xml_attr(a)? }
 		attrs << AttrUse{

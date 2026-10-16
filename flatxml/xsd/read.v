@@ -67,7 +67,7 @@ mut:
 	refs  []u32 // the attribute groups it references
 	done  bool
 	busy  bool
-	doc   u32 // where it is declared
+	doc   u32 // where it is declared (the built-in xml:specialAttrs: where it is first referred to)
 	node  u32
 }
 
@@ -167,10 +167,10 @@ fn (mut r Reader) import(c DocCtx, i u32) ! {
 	r.check_attrs(c, i, ['namespace', 'schemaLocation', 'id'])!
 	r.only_annotations(c, i, .schema, 0)!
 	ns := c.d.attr(i, 'namespace') or { '' }
-	// the XML namespace's attributes are built in (xml_attr), as processors have them: its
-	// schema document, often shipped beside the importing one, is not read
+	// the XML namespace's attributes and attribute group are built in (xml_attr, xml_agroup), as
+	// processors have them: its schema document, often shipped beside the importing one, is not read
 	if ns == xml_ns_uri {
-		r.s.notes << '${c.d.pos(i)}: import of the XML namespace: its attributes are built in, nothing read'
+		r.s.notes << '${c.d.pos(i)}: import of the XML namespace: its attributes and xml:specialAttrs are built in, nothing read'
 		return
 	}
 	loc := (c.d.attr(i, 'schemaLocation') or {

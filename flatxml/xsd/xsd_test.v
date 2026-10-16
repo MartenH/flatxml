@@ -248,6 +248,10 @@ fn test_xml_special_attrs_is_built_in() {
 	assert x.attrs.all(s.uris[s.attributes[it.decl].name.ns] == xml_ns_uri && !it.required)
 	y := s.complex_types[s.complex_type_named(tns, 'Y')?]
 	assert y.attrs.len == 4 && y.attrs[0].decl == x.attrs[1].decl
+	// a type and the type extending it, each referring to the group: one use of each attribute
+	e := compile('<xs:import namespace="http://www.w3.org/XML/1998/namespace" schemaLocation="xml.xsd"/><xs:complexType name="B"><xs:simpleContent><xs:extension base="xs:string"><xs:attributeGroup ref="xml:specialAttrs"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="D"><xs:simpleContent><xs:extension base="t:B"><xs:attributeGroup ref="xml:specialAttrs"/></xs:extension></xs:simpleContent></xs:complexType>')!
+	assert e.complex_types[e.complex_type_named(tns, 'D')?].attrs.len == 4
+	assert e.attribute_groups.last().own == 4
 	assert fails('<xs:complexType name="X"><xs:attributeGroup ref="xml:other"/></xs:complexType>').contains('attribute group {http://www.w3.org/XML/1998/namespace}other is not declared')
 }
 
@@ -260,7 +264,7 @@ fn test_an_import_of_the_xml_namespace_uses_the_built_in_attributes() {
 	space := s.attributes[ct.attrs[0].decl]
 	assert s.uris[space.name.ns] == xml_ns_uri
 	assert s.simple_types[space.typ.idx].enums == ['default', 'preserve']
-	assert s.notes.any(it.contains('XML namespace: its attributes are built in'))
+	assert s.notes.any(it.contains('XML namespace: its attributes and xml:specialAttrs are built in'))
 }
 
 fn test_occurrence_counts_of_any_size() {
