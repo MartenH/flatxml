@@ -1664,3 +1664,20 @@ fn test_no_root_in_the_local_namespace_is_refused() {
 	}
 	assert false
 }
+
+fn test_an_unresolved_difference_the_merge_compared_is_written() {
+	// one name as written: the merge compared the two, so the first value is written, whether the
+	// difference was reported or ignored
+	for rules in ['', '!ignore id'] {
+		s := set_of({
+			'a.xml': '<r id="1"/>'
+			'b.xml': '<r id="2"/>'
+		})
+		mut m := s.merge(parse_rules(rules)!)!
+		assert kinds(m) == if rules == '' { [ProblemKind.value_differs] } else { []ProblemKind{} }, rules
+		mut sb := strings.new_builder(64)
+		m.write(mut sb)!
+		out := sb.str()
+		assert out.contains('id="1"') && !out.contains('id="2"'), out
+	}
+}
