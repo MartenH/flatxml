@@ -944,6 +944,24 @@ pub fn (n MNode) name() string {
 	return if n.i == no_mnode { '' } else { n.m.set.tab.name(n.m.name[n.i]) }
 }
 
+// local_id is the name id of the node's local name: the same id for `ar:X` and `X`. Needs the
+// set's namespaces resolved; text_tag for none.
+pub fn (n MNode) local_id() u32 {
+	if n.i == no_mnode {
+		return text_tag
+	}
+	t := n.m.set.tab
+	if t.local.len != t.names.len {
+		panic('flatxml: local names need resolve_namespaces() to have run')
+	}
+	return t.local[n.m.name[n.i]]
+}
+
+// local_name is the node's name without its prefix; '' for none. Needs namespaces resolved.
+pub fn (n MNode) local_name() string {
+	return if n.i == no_mnode { '' } else { n.m.set.tab.names[n.local_id()] }
+}
+
 // key is the key that identifies the node, as its first contribution has it; '' for a node
 // with no key.
 pub fn (n MNode) key() string {

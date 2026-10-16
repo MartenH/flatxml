@@ -137,3 +137,25 @@ fn test_prefixes_in_scope_answer_for_values() {
 	assert d.ns_for_prefix(t, 'xml')? == xml_ns
 	assert d.ns_for_prefix(t, 'q') == none
 }
+
+fn test_local_names_of_nodes_and_merged_nodes() {
+	mut a := parse_bytes('<p:r xmlns:p="urn:d"><p:item/></p:r>'.bytes(), 'a.xml') or { panic(err) }
+	a.resolve_namespaces() or { panic(err) }
+	mut b := parse_bytes('<r xmlns="urn:d"><item/></r>'.bytes(), 'b.xml') or { panic(err) }
+	b.resolve_namespaces() or { panic(err) }
+	mut s := DocSet.new()
+	s.add(mut a)
+	s.add(mut b)
+	ra, rb := a.root_node(), b.root_node()
+	assert ra.name() == 'p:r'
+	assert ra.local_name() == 'r'
+	assert ra.local_id() == rb.local_id()
+	assert ra.first().local_name() == 'item'
+	m := s.merge(parse_rules('') or { panic(err) }) or { panic(err) }
+	root := m.root()
+	assert root.name() == 'p:r'
+	assert root.local_name() == 'r'
+	assert root.local_id() == rb.local_id()
+	assert Node{}.local_name() == ''
+	assert MNode{}.local_name() == ''
+}

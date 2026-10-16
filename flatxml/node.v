@@ -45,6 +45,17 @@ pub fn (n Node) name() string {
 	return if n.i == no_node { '' } else { n.doc.name(n.i) }
 }
 
+// local_id is the name id of the element's local name (`Doc.local_id`): the same id for `ar:X`
+// and `X`. Needs namespaces resolved; text_tag for none.
+pub fn (n Node) local_id() u32 {
+	return if n.i == no_node { text_tag } else { n.doc.local_id(n.i) }
+}
+
+// local_name is the element's name without its prefix; '' for none. Needs namespaces resolved.
+pub fn (n Node) local_name() string {
+	return if n.i == no_node { '' } else { n.doc.local_name(n.i) }
+}
+
 // is reports whether the element is named name.
 pub fn (n Node) is(name string) bool {
 	return n.i != no_node && n.doc.name(n.i) == name
