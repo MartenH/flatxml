@@ -1641,3 +1641,17 @@ fn test_a_mixed_resolution_set_ignores_and_writes_alike_in_either_order() {
 	}
 	assert false, sb.str()
 }
+
+fn test_an_attribute_a_later_fragment_brings_is_compared_with_later_ones() {
+	// the first fragment has no id; the second brings it, the third differs from the second
+	for rules in ['', '!local urn:d'] {
+		s := resolved_set({
+			'a.xml': '<r xmlns="urn:d"/>'
+			'b.xml': '<r xmlns="urn:d" xmlns:p="urn:d" p:id="1"/>'
+			'c.xml': '<r xmlns="urn:d" xmlns:q="urn:d" q:id="2"/>'
+		})
+		mut m := s.merge(parse_rules(rules)!)!
+		assert kinds(m) == [.value_differs], rules
+		assert m.problems[0].at.map(it.doc.path) == ['b.xml', 'c.xml'], rules
+	}
+}
