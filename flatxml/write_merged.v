@@ -258,12 +258,16 @@ fn (mut w MergedWriter) extra_attrs(n u32, d &Doc, i u32, mut inner map[string]s
 	if m.frag_lo[n + 1] - m.frag_lo[n] == 1 {
 		return []
 	}
+	// an attribute already given, by its expanded name where it has a namespace: p:id and q:id
+	// with p and q bound to one URI are one attribute, and the first fragment's value stands
 	mut have := map[string]bool{}
 	mut used := map[string]bool{} // prefixes the element's own names use
 	used[prefix_of(d.name(i))] = true
 	lo, hi := d.attr_range(i)
+	f0 := m.frags[m.frag_lo[n]] // d's element i
+	own := w.bindings_in(f0.doc, f0.i)
 	for a := lo; a < hi; a++ {
-		have[d.attr_name(a)] = true
+		have[expanded_attr(d.attr_name(a), own)] = true
 		used[prefix_of(d.attr_name(a))] = true
 	}
 	mut out := []AttrChange{}
@@ -273,10 +277,14 @@ fn (mut w MergedWriter) extra_attrs(n u32, d &Doc, i u32, mut inner map[string]s
 		flo, fhi := fd.attr_range(f.i)
 		for a := flo; a < fhi; a++ {
 			name := fd.attr_name(a)
-			if name in have || is_ns_decl_name(name) {
+			if is_ns_decl_name(name) {
 				continue
 			}
-			have[name] = true
+			key := expanded_attr(name, w.bindings_in(f.doc, f.i))
+			if key in have {
+				continue
+			}
+			have[key] = true
 			p := prefix_of(name)
 			if p == '' || p == 'xml' {
 				out << AttrChange{name, fd.attr_value(a)}

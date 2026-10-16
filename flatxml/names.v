@@ -18,6 +18,24 @@ mut:
 	local   []u32 // id -> its local name's id, once split
 	uris    []string // namespace id -> URI
 	uri_ids map[string]u32
+	// (namespace id, local name id) -> the id of the expanded name `{uri}local`, made when first
+	// asked for (Doc.name_in)
+	expanded map[u64]u32
+}
+
+// expanded_id is the id of the expanded name `{uri}local` of namespace ns and local name id local,
+// made the first time it is asked for: what tells an element of a namespace apart from another's
+// that is spelled alike.
+fn (mut t Names) expanded_id(ns u32, local u32) u32 {
+	k := u64(ns) << 32 | local
+	if id := t.expanded[k] {
+		return id
+	}
+	name := '{${t.uris[ns]}}${t.names[local]}'
+	id := t.intern(name.str, name.len)
+	t.split()
+	t.expanded[k] = id
+	return id
 }
 
 // Names.new is an empty table.
@@ -135,7 +153,9 @@ fn (mut t Names) split() {
 		id := u32(t.prefix.len)
 		name := t.names[id]
 		c := name.index_u8(`:`)
-		if c < 0 {
+		if c < 0 || name.starts_with('{') {
+			// no prefix: a plain name, or an expanded one (`{uri}local`), whose URI's colons
+			// are not a prefix's
 			t.prefix << 0
 			t.local << id
 			continue

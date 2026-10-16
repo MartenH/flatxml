@@ -1,6 +1,7 @@
 module flatxml
 
 import os
+import strings
 
 // set_of reads documents from text into one set, each named as given, in the order given.
 fn set_of(files map[string]string) &DocSet {
@@ -1441,4 +1442,46 @@ fn test_a_document_of_another_namespace_listed_first_is_not_the_root() {
 	assert root.fragment_count() == 2
 	assert names_of(root) == ['item:x', 'item:y']
 	assert kinds(m) == [.name_differs]
+}
+
+fn test_a_local_namespace_compares_and_writes_an_attribute_by_its_namespace() {
+	// p:id and q:id are one attribute: p and q are bound to one URI
+	s := resolved_set({
+		'a.xml': '<p:r xmlns:p="urn:d" p:id="1"/>'
+		'b.xml': '<q:r xmlns:q="urn:d" q:id="2"/>'
+	})
+	mut m := s.merge(parse_rules('!local urn:d')!)!
+	assert m.problems.len == 1
+	assert m.problems[0].kind == .value_differs
+	mut sb := strings.new_builder(64)
+	m.write(mut sb)!
+	out := sb.str()
+	// the first fragment's value stands, once
+	assert out.count('id=') == 1, out
+	assert out.contains('p:id="1"'), out
+}
+
+fn test_a_local_namespace_uri_may_hold_a_hash() {
+	rs := parse_rules('!local http://www.w3.org/1999/02/22-rdf-syntax-ns# # a comment')!
+	assert rs.local_ns == 'http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+	assert parse_rules(format_rules(rs)!)!.local_ns == rs.local_ns
+}
+
+fn test_an_unprefixed_element_of_another_namespace_is_not_the_local_ones() {
+	// written `item` in its own default namespace, it is not the local namespace's item
+	s := resolved_set({
+		'a.xml': '<r xmlns="urn:d"><item/></r>'
+		'b.xml': '<r xmlns="urn:d"><item xmlns="urn:v"/></r>'
+	})
+	m := s.merge(parse_rules('r item single merge\n!local urn:d')!)!
+	root := m.root()
+	assert names_of(root) == ['item', '{urn:v}item']
+	assert root.child('item', '').fragment_count() == 1
+	assert root.kids()[1].local_name() == 'item'
+	// nor is one in no namespace
+	n := resolved_set({
+		'a.xml': '<r xmlns="urn:d"><item/></r>'
+		'b.xml': '<r xmlns="urn:d"><item xmlns=""/></r>'
+	}).merge(parse_rules('r item single merge\n!local urn:d')!)!
+	assert names_of(n.root()) == ['item', '{}item']
 }

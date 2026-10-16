@@ -721,7 +721,7 @@ fn (mut m Merged) differs(n u32) {
 				continue
 			}
 			for a := a_lo; a < a_hi; a++ {
-				if d0.attr_tag[a] == d.attr_tag[b] {
+				if m.attr_key(d0, a) == m.attr_key(d, b) {
 					if d0.attr_value(a) != d.attr_value(b) {
 						m.problems << Problem{
 							kind: .value_differs
@@ -736,6 +736,20 @@ fn (mut m Merged) differs(n u32) {
 			}
 		}
 	}
+}
+
+// attr_key is what tells attribute a of d from another of its element: its name as written, or
+// with a local namespace, a prefixed attribute's namespace and local name, so `p:id` and `q:id`
+// with p and q bound to one URI are one attribute.
+@[inline]
+fn (m &Merged) attr_key(d &Doc, a u32) u64 {
+	if m.rules.local != no_local {
+		ns := d.attr_ns_of(a)
+		if ns != no_ns {
+			return u64(1) << 63 | u64(ns) << 32 | d.attr_local_id(a)
+		}
+	}
+	return d.attr_tag[a]
 }
 
 // key_of is the key of node n: a view of key_buf, which does not change once the view is built.

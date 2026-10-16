@@ -177,14 +177,23 @@ fn (d &Doc) need_split() {
 
 // name_in is the name id element i is named by in a merge whose local namespace has id `local`
 // (`RuleSet.local_ns`): its local name's when it is in that namespace, whatever prefix spells
-// it, and its name as written otherwise (no_local: always as written).
-@[inline]
+// it; its name as written when it is in another and has a prefix; and its expanded name
+// (`{uri}item`) when it is in another, or in none, without one, since written `item` it would
+// be taken for the local namespace's. no_local: always as written.
 pub fn (d &Doc) name_in(i u32, local u32) u32 {
 	t := d.tag[i]
-	if local == no_local || t == text_tag || d.ns[i] != local {
+	if local == no_local || t == text_tag {
 		return t
 	}
-	return d.tab.local[t]
+	ns := d.ns[i]
+	if ns == local {
+		return d.tab.local[t]
+	}
+	if d.tab.prefix[t] != 0 {
+		return t
+	}
+	mut tab := unsafe { &Names(voidptr(d.tab)) }
+	return tab.expanded_id(ns, t)
 }
 
 // ns_of is the namespace id of element i.
