@@ -177,6 +177,47 @@ fn test_positions() {
 	assert lc(l0, c0) == '1:1'
 }
 
+fn test_positions_agree_with_counting_lines() {
+	mut src := '<r>'
+	for k in 0 .. 200 {
+		src += '\n' + ' '.repeat(k % 7) + '<e k="${k}">\n<![CDATA[x\ny]]>t</e>'
+	}
+	src += '\r\n</r>\n'
+	d := must(src)
+	for i in 1 .. d.len() {
+		l, c := d.line_col(u32(i))
+		wl, wc := line_col_at(d.src, int(d.src_off[i]))
+		assert lc(l, c) == lc(wl, wc)
+	}
+	assert d.pos(1) == '<string>:1:1'
+}
+
+fn positions_of(d &Doc) []string {
+	mut out := []string{}
+	for i in 1 .. d.len() {
+		out << d.pos(u32(i))
+	}
+	return out
+}
+
+fn test_positions_from_many_threads() {
+	mut src := '<r>'
+	for k in 0 .. 2000 {
+		src += '\n<e>${k}</e>'
+	}
+	src += '</r>'
+	d := must(src)
+	mut threads := []thread []string{}
+	for _ in 0 .. 8 {
+		threads << spawn positions_of(d)
+	}
+	results := threads.wait()
+	for r in results {
+		assert r == results[0]
+	}
+	assert results[0][2000] == '<string>:2001:1'
+}
+
 fn test_errors_name_the_position() {
 	assert fails('<a><b></a>') == '<string>:1:7: end tag </a> does not match <b> at 1:4'
 	assert fails('<a>\n<b>').contains('<string>:2:1: element <b> is not closed')
