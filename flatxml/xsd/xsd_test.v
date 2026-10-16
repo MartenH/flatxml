@@ -240,6 +240,18 @@ fn test_xml_attributes_are_built_in() {
 	assert fails('<xs:complexType name="X"><xs:attribute ref="xml:other"/></xs:complexType>').contains('attribute {http://www.w3.org/XML/1998/namespace}other is not declared')
 }
 
+// a schema importing the XML namespace's schema document, which may sit beside it (and use what
+// this reader does not support, a default on an attribute): the built-in attributes are used
+fn test_an_import_of_the_xml_namespace_uses_the_built_in_attributes() {
+	write_schema('xml.xsd', '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="http://www.w3.org/XML/1998/namespace"><xs:attribute name="space" default="preserve" type="xs:NCName"/></xs:schema>')
+	s := compile('<xs:import namespace="http://www.w3.org/XML/1998/namespace" schemaLocation="xml.xsd"/><xs:complexType name="X"><xs:attribute ref="xml:space"/></xs:complexType>')!
+	ct := s.complex_types[s.complex_type_named(tns, 'X')?]
+	space := s.attributes[ct.attrs[0].decl]
+	assert s.uris[space.name.ns] == xml_ns_uri
+	assert s.simple_types[space.typ.idx].enums == ['default', 'preserve']
+	assert s.notes.any(it.contains('XML namespace: its attributes are built in'))
+}
+
 fn test_occurrence_counts_of_any_size() {
 	s := compile('<xs:complexType name="X"><xs:sequence><xs:element name="a" type="xs:string" minOccurs="79228162514244337593543950335" maxOccurs="79228162514264337593543950335"/><xs:element name="b" type="xs:string" maxOccurs="+0099"/></xs:sequence></xs:complexType>')!
 	kids := s.particle_children(s.complex_types[0].particle)
