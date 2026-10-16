@@ -12,7 +12,7 @@ tools/baseline.sh                          # this tree alone
 
 It builds with `-prod`, writes its documents with `cmd/genxml` into `--workdir` (default
 `/tmp/flatxml_baseline`, reused between runs) and prints, for each measurement, the best and the
-median of `--runs` runs (default 7) and the largest peak memory of the whole process:
+median of `--runs` runs (default 7; for an even count the mean of the middle two) and the largest peak memory of the whole process:
 
 | measurement | what is timed |
 |---|---|
@@ -50,26 +50,27 @@ memory, MB).
 
 | | ffc9510 (2026-10-15, the README's numbers) | 5197d73 (before the merge work) | 9a69529 (now) |
 |---|---|---|---|
-| parse 500 MB | 896 / 1014 (1316) | 890 / 966 (1316) | 928–968 / 994–1081 (1316) |
-| ns 500 MB | 69 / 72 (1241) | 90 / 99 (1139) | 88 / 93–100 (1139) |
-| validate 8 MB | 40 / 40 (30) | 40 / 40 (30) | 40 / 40 (30) |
-| validate 500 MB | 2040 / 2090 (1235) | 2020 / 2090 (1236) | 2030–2060 / 2070–2120 (1236) |
-| merge 10 files | 231 / 242 (231) | 264 / 283 (235) | 198–211 / 206–218 (223–224) |
+| parse 500 MB | 967 / 994 (1316) | 978 / 1040 (1316) | 927–946 / 969–1035 (1316) |
+| ns 500 MB | 75 / 79 (1179) | 90 / 104 (1233) | 86–93 / 93–100 (1155–1227) |
+| validate 8 MB | 30 / 40 (30) | 40 / 40 (30) | 40 / 40–50 (30) |
+| validate 500 MB | 1980 / 2035 (1282) | 1980 / 2100 (1236) | 1990–2010 / 2080–2130 (1236–1251) |
+| merge 10 files | 228 / 243 (230) | 252 / 260 (232) | 196–198 / 204 (224–232) |
 
 Each older commit was measured in its own run beside `main`, which is why `main` has a range: its
-two runs.
+two runs. The validations are whole-process wall times, which `/usr/bin/time` gives in steps of
+10 ms, so at 8 MB 30, 40 and 50 are one result rounded.
 
 What the table says:
 
 - **Parsing and validating** are unchanged since the README's numbers: the parser source is the
   same, and the differences are within the noise above.
-- **Merge** is about 20% faster than at 5197d73, with about 5% less memory, from the merge work of
+- **Merge** is about 20% faster than at 5197d73, from the merge work of
   2026-10-16 (sorting without closures, scratch buffers kept by the view). The merged output is the
   same. ffc9510 is faster than 5197d73 because the merge did less then (expanded names, ignored
   attributes, the comparisons between contributions came after it), so the fair before-and-after
   is against 5197d73.
-- **Namespace resolution** costs about 20 ms more on 500 MB than at ffc9510 (about 2% of the
-  parse), with about 100 MB less peak memory: the expanded-name identities for elements and
+- **Namespace resolution** costs about 15 ms more on 500 MB than at ffc9510 (about 2% of the
+  parse): the expanded-name identities for elements and
   attributes (602045d and the local-namespace commits before it). A known cost, not a regression to
   chase.
 

@@ -12,7 +12,8 @@
 #              contributions) merged by keyed rules
 # Each prints the best and the median of N runs, and the largest peak memory. With --against REV
 # the same measurements run for REV too, built from a temporary worktree, and the merged output of
-# the two is compared byte for byte. The two builds take turns, in the opposite order each round:
+# the two is compared byte for byte. The exit status is nonzero when a measurement fails, when
+# this build cannot write the merged view, or when the two merged views differ. The two builds take turns, in the opposite order each round:
 # under WSL2 one process's time depends on the one before it (the 500 MB parse alternates between
 # about 0.95 s and 1.25 s with the same binary), and a fixed order puts every slow run on one build.
 # Absolute numbers move with the compiler and the machine; compare two builds measured together.
@@ -100,14 +101,15 @@ for what in parse ns validate8 validate500 merge; do
 		order=("${builds[@]}")
 		[ $((r % 2)) -eq 1 ] || order=($(printf '%s\n' "${builds[@]}" | tac))
 		for b in "${order[@]}"; do
-			read -r ms kb < <(one "$b" "$what")
+			res=$(one "$b" "$what") || exit 1
+			read -r ms kb <<< "$res"
 			times[$b]+="$ms "
 			[ "${peaks[$b]:-0}" -ge "$kb" ] || peaks[$b]=$kb
 		done
 	done
 	printf '%-12s' "$what"
 	for b in "${builds[@]}"; do
-		read -r best med < <(tr ' ' '\n' <<< "${times[$b]}" | grep . | sort -g | awk '{a[NR]=$1} END{print a[1], a[int((NR+1)/2)]}')
+		read -r best med < <(tr ' ' '\n' <<< "${times[$b]}" | grep . | sort -g | awk '{a[NR]=$1} END{m = NR % 2 ? a[(NR+1)/2] : (a[NR/2] + a[NR/2+1]) / 2; print a[1], m}')
 		printf '%30s' "$(printf '%.0f / %.0f (%d)' "$best" "$med" $((peaks[$b] / 1024)))"
 	done
 	echo
@@ -116,12 +118,17 @@ done
 
 if [ -n "$against" ]; then
 	rm -f "$work"/merged-*.xml
-	for b in then now; do "$work/$b-cli" merge --rules "$work/rules.txt" -o "$work/merged-$b.xml" "$work/parts/" > /dev/null 2>&1 || true; done
-	if [ ! -f "$work/merged-then.xml" ]; then
+	# an older build may not write a merged view at all; this one must, and the same bytes
+	if ! out=$("$work/now-cli" merge --rules "$work/rules.txt" -o "$work/merged-now.xml" "$work/parts/" 2>&1); then
+		printf 'merged output: this build failed to write it:\n%s\n' "$out" >&2
+		exit 1
+	fi
+	if ! "$work/then-cli" merge --rules "$work/rules.txt" -o "$work/merged-then.xml" "$work/parts/" > /dev/null 2>&1; then
 		echo 'merged output: not compared (that build cannot write a merged view)'
 	elif cmp -s "$work/merged-then.xml" "$work/merged-now.xml"; then
 		echo 'merged output: the same'
 	else
-		echo 'merged output: DIFFERS'
+		echo 'merged output: DIFFERS' >&2
+		exit 1
 	fi
 fi
