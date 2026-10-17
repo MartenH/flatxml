@@ -111,6 +111,13 @@ fn test_entities_and_line_endings_in_text() {
 	assert d.text_raw(1).starts_with('&lt;tag&gt;')
 }
 
+fn test_character_references_have_no_length_limit() {
+	z := '0'.repeat(40)
+	d := must('<a k="&#${z}65;&#x${z}1F600;">&#${z}65;&#x${z}42;</a>')
+	assert d.text(1) == 'AB'
+	assert attr_of(d, 1, 'k') == 'A😀'
+}
+
 fn test_cdata_is_literal() {
 	d := must('<a><![CDATA[x &amp; <y>]]></a>')
 	assert d.text(1) == 'x &amp; <y>'
@@ -241,6 +248,9 @@ fn test_errors_name_the_position() {
 	assert fails('<a>&nope;</a>').contains('unknown entity')
 	assert fails('<a>&#0;</a>').contains('invalid character reference')
 	assert fails('<a>AT&T</a>').contains('does not start an entity reference')
+	assert fails('<a>AT&T is a company; it is</a>').contains('does not start an entity reference')
+	assert fails('<a>&#${'0'.repeat(40)};</a>').contains('invalid character reference')
+	assert fails('<a>&#x${'0'.repeat(40)}110000;</a>').contains('invalid character reference')
 	assert fails('<a x="1"y="2"/>').contains('expected whitespace')
 	assert fails('<a x=1/>').contains('expected a quoted value')
 	assert fails('<a x="<"/>').contains('`<` in the value')
