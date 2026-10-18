@@ -548,7 +548,7 @@ fn apply_random(mut r Rng, mut e Edit, mut root TM, mut gone []&TM, other &Doc) 
 
 // same checks the written document's element w against the model, and that what no edit touched
 // is byte for byte what it was.
-fn same(mut w Doc, wi u32, t &TM, src &Doc) ! {
+fn same_as_source(mut w Doc, wi u32, t &TM, src &Doc) ! {
 	if w.name(wi) != t.name {
 		return error('name ${w.name(wi)}, expected ${t.name}')
 	}
@@ -594,7 +594,7 @@ fn same(mut w Doc, wi u32, t &TM, src &Doc) ! {
 		return error('<${t.name}> has ${kids.len} children, expected ${t.kids.len}')
 	}
 	for k, c in kids {
-		same(mut w, c.i, t.kids[k], src)!
+		same_as_source(mut w, c.i, t.kids[k], src)!
 	}
 }
 
@@ -627,7 +627,7 @@ fn test_random_edit_sets() {
 		out := e.xml()
 		mut w := parse_string(out) or { panic('${err}\n${out}\n--- from\n${s}') }
 		w.resolve_namespaces() or { panic('${err}\n${out}\n--- from\n${s}') }
-		same(mut w, w.root(), root, d) or { panic('${err}\n${out}\n--- from\n${s}') }
+		same_as_source(mut w, w.root(), root, d) or { panic('${err}\n${out}\n--- from\n${s}') }
 		// the bytes before and after the root are the file's
 		lo, hi := d.span(d.root())
 		assert out.starts_with(s[..lo]) && out.ends_with(s[hi..])

@@ -1,6 +1,6 @@
 module xsd
 
-fn m(p string, s string) bool {
+fn matches(p string, s string) bool {
 	pat := compile_pattern(p) or { panic(err) }
 	return pat.matches(s)
 }
@@ -11,39 +11,39 @@ fn bad(p string) string {
 }
 
 fn test_basics() {
-	assert m('abc', 'abc') && !m('abc', 'ab') && !m('abc', 'abcd')
-	assert m('a|bc', 'bc') && m('a|bc', 'a') && !m('a|bc', 'abc')
-	assert m('(ab)*', '') && m('(ab)*', 'abab') && !m('(ab)*', 'aba')
-	assert m('a+b?', 'aaa') && m('a+b?', 'ab') && !m('a+b?', 'b')
-	assert m('a{2,3}', 'aa') && m('a{2,3}', 'aaa') && !m('a{2,3}', 'a') && !m('a{2,3}', 'aaaa')
-	assert m('a{2}', 'aa') && !m('a{2}', 'aaa') && m('a{2,}', 'aaaaa') && !m('a{2,}', 'a')
-	assert m('^$', '^$') // no anchors in XSD
-	assert m('', '') && !m('', 'a')
+	assert matches('abc', 'abc') && !matches('abc', 'ab') && !matches('abc', 'abcd')
+	assert matches('a|bc', 'bc') && matches('a|bc', 'a') && !matches('a|bc', 'abc')
+	assert matches('(ab)*', '') && matches('(ab)*', 'abab') && !matches('(ab)*', 'aba')
+	assert matches('a+b?', 'aaa') && matches('a+b?', 'ab') && !matches('a+b?', 'b')
+	assert matches('a{2,3}', 'aa') && matches('a{2,3}', 'aaa') && !matches('a{2,3}', 'a') && !matches('a{2,3}', 'aaaa')
+	assert matches('a{2}', 'aa') && !matches('a{2}', 'aaa') && matches('a{2,}', 'aaaaa') && !matches('a{2,}', 'a')
+	assert matches('^$', '^$') // no anchors in XSD
+	assert matches('', '') && !matches('', 'a')
 }
 
 fn test_classes() {
-	assert m('[a-c]+', 'abcba') && !m('[a-c]+', 'abd')
-	assert m('[^a-c]', 'd') && !m('[^a-c]', 'a')
-	assert m('[a-z-[aeiou]]+', 'xyz') && !m('[a-z-[aeiou]]+', 'xaz')
-	assert m('[-a]', '-') && m('[a-]', '-') && m('[\\-a]', '-')
+	assert matches('[a-c]+', 'abcba') && !matches('[a-c]+', 'abd')
+	assert matches('[^a-c]', 'd') && !matches('[^a-c]', 'a')
+	assert matches('[a-z-[aeiou]]+', 'xyz') && !matches('[a-z-[aeiou]]+', 'xaz')
+	assert matches('[-a]', '-') && matches('[a-]', '-') && matches('[\\-a]', '-')
 	// a literal `-` last before a subtraction
-	assert m('[a-z--[b-z]]', '-') && m('[a-z--[b-z]]', 'a') && !m('[a-z--[b-z]]', 'b')
-	assert m('.', 'x') && !m('.', '\n')
-	assert m('\\d+', '٣٤') && !m('\\d', 'x') // \d is every decimal digit, not only 0-9
-	assert m('\\s', '\t') && !m('\\S', ' ')
-	assert m('\\w', 'é') && !m('\\w', '!')
-	assert m('\\p{Lu}', 'É') && !m('\\p{Lu}', 'é') && m('\\P{Lu}', 'é') && m('\\p{L}', 'é')
-	assert m('[\\d\\s]+', '1 2') && m('[\\D]', 'a') && !m('[\\D]', '1')
-	assert m('\\.\\*\\{', '.*{')
+	assert matches('[a-z--[b-z]]', '-') && matches('[a-z--[b-z]]', 'a') && !matches('[a-z--[b-z]]', 'b')
+	assert matches('.', 'x') && !matches('.', '\n')
+	assert matches('\\d+', '٣٤') && !matches('\\d', 'x') // \d is every decimal digit, not only 0-9
+	assert matches('\\s', '\t') && !matches('\\S', ' ')
+	assert matches('\\w', 'é') && !matches('\\w', '!')
+	assert matches('\\p{Lu}', 'É') && !matches('\\p{Lu}', 'é') && matches('\\P{Lu}', 'é') && matches('\\p{L}', 'é')
+	assert matches('[\\d\\s]+', '1 2') && matches('[\\D]', 'a') && !matches('[\\D]', '1')
+	assert matches('\\.\\*\\{', '.*{')
 }
 
 fn test_the_patterns_of_a_generated_schema() {
-	assert m('SN-[0-9]{7}', 'SN-0007919') && !m('SN-[0-9]{7}', 'SN-79')
+	assert matches('SN-[0-9]{7}', 'SN-0007919') && !matches('SN-[0-9]{7}', 'SN-79')
 	// the shapes the measured schemas use: identifiers, paths, numbers with alternatives
-	assert m('[a-zA-Z][a-zA-Z0-9_]{0,127}', 'Abc_1')
-	assert m('/?[a-zA-Z][a-zA-Z0-9_]{0,127}(/[a-zA-Z][a-zA-Z0-9_]{0,127})*', '/Pkg/Sub/Elem')
-	assert m('[+\\-]?[1-9][0-9]*|0x[0-9a-f]+|0[0-7]*|0b[0-1]+', '0x1f')
-	assert !m('[+\\-]?[1-9][0-9]*|0x[0-9a-f]+|0[0-7]*|0b[0-1]+', '0x')
+	assert matches('[a-zA-Z][a-zA-Z0-9_]{0,127}', 'Abc_1')
+	assert matches('/?[a-zA-Z][a-zA-Z0-9_]{0,127}(/[a-zA-Z][a-zA-Z0-9_]{0,127})*', '/Pkg/Sub/Elem')
+	assert matches('[+\\-]?[1-9][0-9]*|0x[0-9a-f]+|0[0-7]*|0b[0-1]+', '0x1f')
+	assert !matches('[+\\-]?[1-9][0-9]*|0x[0-9a-f]+|0[0-7]*|0b[0-1]+', '0x')
 }
 
 fn test_errors() {
@@ -68,8 +68,8 @@ fn test_linear_on_a_pathological_pattern() {
 	for _ in 0 .. 5000 {
 		s += 'a'
 	}
-	assert !m('(a|a)*b', s)
-	assert !m('(a*)*b', s)
+	assert !matches('(a|a)*b', s)
+	assert !matches('(a*)*b', s)
 }
 
 // The DFA answers exactly as the Pike VM does, on strings made to probe each pattern.
@@ -101,7 +101,7 @@ fn test_review_cases() {
 	assert bad('((){99999}){99999}').contains('not supported')
 	// an unescaped `-` cannot end a range
 	assert bad('[!--]').contains('must be escaped in a range')
-	assert m('[!-\\-]', '-')
+	assert matches('[!-\\-]', '-')
 	// malformed UTF-8 reads as U+FFFD, one byte at a time
 	for bytes in ['\xf8\x80\x80\x80', '\xc0\xaf', '\xed\xa0\x80', '\xf4\x90\x80\x80'] {
 		c, w := decode_rune(bytes, 0)

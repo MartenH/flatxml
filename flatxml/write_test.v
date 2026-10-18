@@ -12,7 +12,7 @@ fn attr_or(d &Doc, i u32, name string) string {
 }
 
 // written is the document written in mode, as a string.
-fn written(d &Doc, mode WriteMode) string {
+fn written_as(d &Doc, mode WriteMode) string {
 	mut sb := strings.new_builder(d.src_len)
 	d.write(mut sb, mode: mode) or { panic(err) }
 	return sb.str()
@@ -61,11 +61,11 @@ fn canonical(d &Doc) string {
 // rewrite parses to the same tree.
 fn round_trips(s string) {
 	d := parsed(s)
-	assert written(d, .verbatim) == s
-	assert written(d, .nodes) == s
-	again := parsed(written(d, .rewrite))
+	assert written_as(d, .verbatim) == s
+	assert written_as(d, .nodes) == s
+	again := parsed(written_as(d, .rewrite))
 	if canonical(again) != canonical(d) {
-		panic('rewrite differs:\n${written(d, .rewrite)}\n--- from\n${s}')
+		panic('rewrite differs:\n${written_as(d, .rewrite)}\n--- from\n${s}')
 	}
 	// every element's span is a whole element
 	for k in 1 .. d.len() {
@@ -124,9 +124,9 @@ fn test_round_trip_testdata() {
 	for f in os.walk_ext(os.join_path(@VMODROOT, 'testdata'), '.xml') {
 		s := os.read_file(f) or { panic(err) }
 		d := parse_string(s) or { continue } // the namespace error files parse; a non-XML file would not
-		assert written(d, .verbatim) == s, f
-		assert written(d, .nodes) == s, f
-		again := parsed(written(d, .rewrite))
+		assert written_as(d, .verbatim) == s, f
+		assert written_as(d, .nodes) == s, f
+		again := parsed(written_as(d, .rewrite))
 		assert canonical(again) == canonical(d), f
 	}
 }
@@ -270,7 +270,7 @@ fn test_outer_xml_carries_namespaces() {
 	// the document node is the whole document
 	whole := '<?xml version="1.0"?>\n<!-- c -->\n<r><!-- c --><a k="1"/></r>\n'
 	w := parsed(whole)
-	assert w.outer_xml(0) == written(w, .rewrite)
+	assert w.outer_xml(0) == written_as(w, .rewrite)
 	assert w.outer_xml(0) == '<?xml version="1.0"?>\n<!-- c -->\n<r><a k="1"/></r>\n'
 	// a text node is its text
 	m := parsed('<m>a<x/>b &amp; c</m>')
