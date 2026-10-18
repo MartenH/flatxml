@@ -2,7 +2,7 @@ module flatxml
 
 import os
 
-fn resolved(src string) &Doc {
+fn parse_resolved(src string) &Doc {
 	mut d := parse_string(src) or { panic(err) }
 	d.resolve_namespaces() or { panic(err) }
 	return d
@@ -27,13 +27,13 @@ fn expanded_names(d &Doc) []string {
 }
 
 fn test_scopes_and_defaults() {
-	d := resolved('<r xmlns="urn:a" xmlns:b="urn:b"><x/><b:y/><s xmlns="urn:c" xmlns:b="urn:b2"><x/><b:y/><t xmlns=""><x/></t></s><x/></r>')
+	d := parse_resolved('<r xmlns="urn:a" xmlns:b="urn:b"><x/><b:y/><s xmlns="urn:c" xmlns:b="urn:b2"><x/><b:y/><t xmlns=""><x/></t></s><x/></r>')
 	assert expanded_names(d) == ['{urn:a}r', '{urn:a}x', '{urn:b}y', '{urn:c}s', '{urn:c}x',
 		'{urn:b2}y', '{}t', '{}x', '{urn:a}x']
 }
 
 fn test_attributes_take_no_default_namespace() {
-	d := resolved('<r xmlns="urn:a" xmlns:p="urn:p" k="1" p:k="2"/>')
+	d := parse_resolved('<r xmlns="urn:a" xmlns:p="urn:p" k="1" p:k="2"/>')
 	lo, hi := d.attr_range(d.root())
 	mut got := []string{}
 	for a := lo; a < hi; a++ {
@@ -47,7 +47,7 @@ fn test_attributes_take_no_default_namespace() {
 }
 
 fn test_reserved_and_decoded() {
-	d := resolved('<r xml:lang="en" xmlns:xml="http://www.w3.org/XML/1998/namespace" xmlns:e="urn:&amp;e"><e:x/></r>')
+	d := parse_resolved('<r xml:lang="en" xmlns:xml="http://www.w3.org/XML/1998/namespace" xmlns:e="urn:&amp;e"><e:x/></r>')
 	lo, _ := d.attr_range(d.root())
 	assert d.attr_ns_of(lo) == xml_ns
 	assert d.attr_local_name(lo) == 'lang'
@@ -57,7 +57,7 @@ fn test_reserved_and_decoded() {
 }
 
 fn test_local_names_share_ids() {
-	d := resolved('<a:x xmlns:a="urn:a" xmlns:b="urn:b"><b:x/><x/></a:x>')
+	d := parse_resolved('<a:x xmlns:a="urn:a" xmlns:b="urn:b"><b:x/><x/></a:x>')
 	c := d.first_child(d.root())
 	assert d.local_id(d.root()) == d.local_id(c)
 	assert d.local_id(c) == d.local_id(d.next_sibling(c))
@@ -126,7 +126,7 @@ fn test_uris_outlive_the_source() {
 }
 
 fn test_prefixes_in_scope_answer_for_values() {
-	d := resolved('<r xmlns="urn:d" xmlns:p="urn:p"><s xmlns:p="urn:p2"><t/></s><u xmlns=""/></r>')
+	d := parse_resolved('<r xmlns="urn:d" xmlns:p="urn:p"><s xmlns:p="urn:p2"><t/></s><u xmlns=""/></r>')
 	s := d.first_child(d.root())
 	t := d.first_child(s)
 	u := d.next_sibling(s)

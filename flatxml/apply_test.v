@@ -33,7 +33,7 @@ fn view_of(files map[string]string, rules string) &Merged {
 }
 
 // written is each document of the edited set as XML, by its path.
-fn written(mut me MEdit) map[string]string {
+fn edited_texts(mut me MEdit) map[string]string {
 	mut out := map[string]string{}
 	for k, d in me.view.set.docs {
 		out[d.path] = if e := me.edits[k] { e.xml() } else { d.src_str() }
@@ -64,14 +64,14 @@ fn test_a_value_held_in_several_files_changes_in_each() {
 	me.set_attr(x, 'w', '2')!
 	me.set_text(x.child('v', ''), '9')!
 	assert me.edited() == [0, 1]
-	out := written(mut me)
+	out := edited_texts(mut me)
 	assert out['a.xml'] == '<r>\n  <s id="x" w="2"><v>9</v></s>\n</r>'
 	assert out['b.xml'] == '<r>\n  <s id="x" w="2"><o id="p"/></s>\n  <s id="y"/>\n</r>'
 	assert out['c.xml'] == '<r><!-- untouched --></r>'
 	// a merged node removed from every file that holds part of it
 	mut me2 := m.edit()
 	me2.remove(x)!
-	out2 := written(mut me2)
+	out2 := edited_texts(mut me2)
 	assert out2['a.xml'] == '<r>\n</r>'
 	assert out2['b.xml'] == '<r>\n  <s id="y"/>\n</r>'
 	// a new element under one fragment, in the document named
@@ -79,7 +79,7 @@ fn test_a_value_held_in_several_files_changes_in_each() {
 	t := me3.fragment(x, 1)
 	mut e := t.e
 	e.insert(t, 0, '<o id="n"/>')!
-	assert written(mut me3)['b.xml'].contains('<s id="x" w="1"><o id="n"/><o id="p"/></s>')
+	assert edited_texts(mut me3)['b.xml'].contains('<s id="x" w="1"><o id="n"/><o id="p"/></s>')
 	assert !me3.fragment(m.at_path('/y'), 0).ok()
 }
 
@@ -123,7 +123,7 @@ fn test_a_diff_applied_to_a_set() {
 	}, set_rules)
 	d := diff(old, new)
 	mut me := d.apply()!
-	out := written(mut me)
+	out := edited_texts(mut me)
 	// a new element goes to the file of its nearest sibling (t before x, the o with the others),
 	// after the nearest sibling before it there
 	assert out['a.xml'] == '<r><s id="t"><v>t</v></s><s id="x" w="2"><v>2</v></s></r>'
@@ -135,7 +135,7 @@ fn test_a_diff_applied_to_a_set() {
 			return if p.name() == 'r' { 1 } else { -1 }
 		}
 	)!
-	assert written(mut me2)['b.xml'].starts_with('<r><s id="t"><v>t</v></s><s id="x" w="2">')
+	assert edited_texts(mut me2)['b.xml'].starts_with('<r><s id="t"><v>t</v></s><s id="x" w="2">')
 	// a diff of documents applies to the first
 	a := doc_named('a.xml', '<r><a>1</a><b/></r>')
 	b := doc_named('b.xml', '<r><b/><a>2</a></r>')
@@ -291,7 +291,7 @@ fn test_a_set_diffed_against_its_edited_model_and_patched_is_the_model() {
 		d := diff(old, new)
 		changes += d.changes.len
 		mut me := d.apply() or { panic('round ${round}: ${err}\n${parts}\n${new_xml}') }
-		out := written(mut me)
+		out := edited_texts(mut me)
 		after := set_from(out).merge(rules) or { panic(err) }
 		mut again := diff(after, new)
 		assert after.problems.len == 0 && again.equal(), 'round ${round}\n${parts}\n${new_xml}\n${out}\n${again.changes.map(again.describe(it))}'
@@ -325,7 +325,7 @@ fn applied(old map[string]string, new map[string]string, rules string, into ?Int
 	}
 	d := diff(o.merge(rs) or { panic(err) }, n.merge(rs) or { panic(err) })
 	mut me := d.apply(into: into) or { panic(err) }
-	return written(mut me)
+	return edited_texts(mut me)
 }
 
 fn test_changes_inside_a_moved_node_apply() {
