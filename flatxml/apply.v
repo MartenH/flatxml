@@ -500,9 +500,9 @@ mut:
 	at   int // the place after the last sibling passed that this fragment holds
 }
 
-// fill puts the added and moved nodes of one parent in, lowest index first. It walks the new
-// parent's children once: a child that stayed moves each fragment's place past it, and a child
-// to put in goes to its document at the place reached there.
+// fill puts the added and moved nodes of one parent in. It walks the new parent's children once,
+// in the order place_order gives: a child that stayed moves each fragment's place past it, and a child to
+// put in goes to its document at the place reached there.
 fn (mut a Applier) fill(changes []Change) ! {
 	d := a.d
 	p := changes[0].parent
@@ -516,38 +516,43 @@ fn (mut a Applier) fill(changes []Change) ! {
 			kids: e.kids(f.key)
 		}
 	}
+	order := place_order(d.new, np, lo, hi)
+	mut to_put := map[int]int{} // a child's offset -> its change
+	for k, c in changes {
+		to_put[c.index] = k
+	}
 	// for each child, the document of the nearest sibling after it that stayed, for the default
 	holder := a.holders(np, spots)
 	mut next_same := []int{len: hi - lo, init: -1}
 	mut next_any := []int{len: hi - lo, init: -1}
-	for s := hi - lo - 2; s >= 0; s-- {
-		r := d.new.rule[lo + s + 1]
-		next_any[s] = if holder[s + 1] >= 0 { holder[s + 1] } else { next_any[s + 1] }
-		next_same[s] = if d.new.rule[lo + s] == r && holder[s + 1] >= 0 {
-			holder[s + 1]
-		} else if d.new.rule[lo + s] == r {
-			next_same[s + 1]
+	for w := hi - lo - 2; w >= 0; w-- {
+		following := order[w + 1]
+		r := d.new.rule[lo + following]
+		same := d.new.rule[lo + order[w]] == r
+		next_any[w] = if holder[following] >= 0 { holder[following] } else { next_any[w + 1] }
+		next_same[w] = if same && holder[following] >= 0 {
+			holder[following]
+		} else if same {
+			next_same[w + 1]
 		} else {
 			-1
 		}
 	}
 	mut last_same := map[u32]int{} // a rule -> the document of the last sibling of it passed
 	mut last_any := -1
-	mut x := 0
-	for s in 0 .. hi - lo {
+	for w, s in order {
 		n := u32(lo + s)
 		rule := d.new.rule[n]
-		if x < changes.len && changes[x].index == s {
-			c := changes[x]
-			x++
+		if s in to_put {
+			c := changes[to_put[s]]
 			default_doc := if k := last_same[rule] {
 				k
-			} else if next_same[s] >= 0 {
-				next_same[s]
+			} else if next_same[w] >= 0 {
+				next_same[w]
 			} else if last_any >= 0 {
 				last_any
-			} else if next_any[s] >= 0 {
-				next_any[s]
+			} else if next_any[w] >= 0 {
+				next_any[w]
 			} else {
 				a.me.fragments(p)[0].e.number
 			}
@@ -576,6 +581,60 @@ fn (mut a Applier) fill(changes []Change) ! {
 			}
 		}
 	}
+}
+
+// PlacedKid is a child of a parent: its offset among the parent's children, and where it is written.
+struct PlacedKid {
+	offset int
+	at     u32
+}
+
+// place_order is the offsets of the children lo .. hi of np in the order to put them in. Children
+// with a key are found by it, and the merged view's order means something among those of one
+// rule and element name: they keep it, and go where the first of them is written. A child with no key is found by
+// its place, and the view lists it by its rule, not by that place: it goes where it is written.
+// A parent of several fragments has no one written order and keeps the view's.
+fn place_order(m &Merged, np MNode, lo int, hi int) []int {
+	mut order := []int{cap: hi - lo}
+	mut groups := map[u64][]int{}
+	for s in 0 .. hi - lo {
+		order << s
+		n := m.node(u32(lo + s))
+		if n.keyed() {
+			groups[kid_group(m, n)] << s
+		}
+	}
+	if np.fragment_count() != 1 {
+		return order
+	}
+	mut kids := []PlacedKid{cap: hi - lo}
+	for s in order {
+		kids << PlacedKid{
+			offset: s
+			at:     m.node(u32(lo + s)).fragment(0).i
+		}
+	}
+	kids.sort(a.at < b.at)
+	mut placed := []int{cap: hi - lo}
+	mut seen := map[u64]bool{}
+	for kid in kids {
+		n := m.node(u32(lo + kid.offset))
+		if !n.keyed() {
+			placed << kid.offset
+			continue
+		}
+		group := kid_group(m, n)
+		if group !in seen {
+			seen[group] = true
+			placed << groups[group]
+		}
+	}
+	return placed
+}
+
+// kid_group is the rule and the element name of a child.
+fn kid_group(m &Merged, n MNode) u64 {
+	return mix(u64(m.rule[n.i]), u64(n.tag()))
 }
 
 // holders is, for each new child of np, the document of a fragment of the parent (in spots)
