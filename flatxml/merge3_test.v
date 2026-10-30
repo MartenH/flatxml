@@ -444,3 +444,52 @@ fn test_equal_additions_are_matched_one_to_one() {
 	assert m.clean()
 	assert out['a.xml'] == '<r><s><x/><x/></s></r>'
 }
+
+fn test_an_ignored_attribute_is_nothing_for_a_removal_to_lose() {
+	rules := '!ignore u\n' + m3_rules
+	base := {
+		'a.xml': '<r>\n<s id="1" u="a"><v>x</v></s>\n<s id="2"/></r>'
+	}
+	changed := {
+		'a.xml': '<r>\n<s id="1" u="b"><v>x</v></s>\n<s id="2"/></r>'
+	}
+	removed := {
+		'a.xml': '<r>\n<s id="2"/></r>'
+	}
+	// ours changed it, theirs removed it
+	gone, m := merged3(base, changed, removed, rules)
+	assert m.clean()
+	assert gone['a.xml'] == '<r>\n<s id="2"/></r>'
+	// ours removed it, theirs changed it
+	gone2, m2 := merged3(base, removed, changed, rules)
+	assert m2.clean()
+	assert gone2['a.xml'] == '<r>\n<s id="2"/></r>'
+	// any other attribute, or the same one when the rules do not ignore it, is still a change
+	_, kept := merged3(base, changed, removed, m3_rules)
+	assert kept.conflicts.map(it.kind) == [.removed]
+	other := {
+		'a.xml': '<r>\n<s id="1" u="a" w="1"><v>x</v></s>\n<s id="2"/></r>'
+	}
+	_, kept2 := merged3(base, other, removed, rules)
+	assert kept2.conflicts.map(it.kind) == [.removed]
+}
+
+fn test_a_namespaced_attribute_is_ignored_by_its_expanded_name() {
+	rs := parse_rules('!ignore {urn:x}u\n' + m3_rules)!
+	view := fn [rs] (xml string) !&Merged {
+		mut s := mset({
+			'a.xml': xml
+		})
+		for mut d in s.docs {
+			d.resolve_namespaces()!
+		}
+		return s.merge(rs)!
+	}
+	base := view('<r xmlns:p="urn:x">\n<s id="1" p:u="a"><v>x</v></s>\n<s id="2"/></r>')!
+	changed := view('<r xmlns:p="urn:x">\n<s id="1" p:u="b"><v>x</v></s>\n<s id="2"/></r>')!
+	removed := view('<r xmlns:p="urn:x">\n<s id="2"/></r>')!
+	m := merge3(base, changed, removed)!
+	assert m.clean()
+	m2 := merge3(base, removed, changed)!
+	assert m2.clean()
+}
