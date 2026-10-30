@@ -473,3 +473,23 @@ fn test_an_ignored_attribute_is_nothing_for_a_removal_to_lose() {
 	_, kept2 := merged3(base, other, removed, rules)
 	assert kept2.conflicts.map(it.kind) == [.removed]
 }
+
+fn test_a_namespaced_attribute_is_ignored_by_its_expanded_name() {
+	rs := parse_rules('!ignore {urn:x}u\n' + m3_rules)!
+	view := fn [rs] (xml string) !&Merged {
+		mut s := mset({
+			'a.xml': xml
+		})
+		for mut d in s.docs {
+			d.resolve_namespaces()!
+		}
+		return s.merge(rs)!
+	}
+	base := view('<r xmlns:p="urn:x">\n<s id="1" p:u="a"><v>x</v></s>\n<s id="2"/></r>')!
+	changed := view('<r xmlns:p="urn:x">\n<s id="1" p:u="b"><v>x</v></s>\n<s id="2"/></r>')!
+	removed := view('<r xmlns:p="urn:x">\n<s id="2"/></r>')!
+	m := merge3(base, changed, removed)!
+	assert m.clean()
+	m2 := merge3(base, removed, changed)!
+	assert m2.clean()
+}
