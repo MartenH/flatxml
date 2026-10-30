@@ -445,6 +445,109 @@ fn test_equal_additions_are_matched_one_to_one() {
 	assert out['a.xml'] == '<r><s><x/><x/></s></r>'
 }
 
+fn test_an_added_child_no_rule_names_stays_where_it_was_written() {
+	rules := 'r s key=@id merge\ns n single merge\ns d single merge\ns c single merge\n'
+	base := {
+		'a.xml': '<r><s id="1"><n>x</n><d>y</d><c>z</c></s></r>'
+	}
+	ours := {
+		'a.xml': '<r><s id="1"><n>x</n><a>note</a><d>y</d><c>z</c></s></r>'
+	}
+	theirs := {
+		'a.xml': '<r><s id="1"><n>x</n><d>y2</d><c>z</c></s></r>'
+	}
+	out, m := merged3(base, ours, theirs, rules)
+	assert m.clean()
+	assert out['a.xml'] == '<r><s id="1"><n>x</n><a>note</a><d>y2</d><c>z</c></s></r>'
+	// the same on the other side
+	out2, m2 := merged3(base, theirs, ours, rules)
+	assert m2.clean()
+	assert out2['a.xml'] == '<r><s id="1"><n>x</n><a>note</a><d>y2</d><c>z</c></s></r>'
+	// and when a rule names it, listed after the others
+	out3, m3 := merged3(base, ours, theirs, rules + 's a single merge
+')
+	assert m3.clean()
+	assert out3['a.xml'] == '<r><s id="1"><n>x</n><a>note</a><d>y2</d><c>z</c></s></r>'
+}
+
+fn test_a_child_with_no_key_goes_where_it_is_written_under_a_rule_for_every_child() {
+	mut rules := RuleSet{
+		rules: [
+			Rule{
+				parent:  '*'
+				key_fn:  fn (n Node) ?string {
+					return if n.name() == 's' { n.attr('id') } else { none }
+				}
+				keyless: .quiet
+				merge:   true
+			},
+		]
+	}
+	base := parse_bytes('<r><s id="1"><n>x</n><d>y</d></s></r>'.bytes(), 'a.xml')!
+	ours := parse_bytes('<r><s id="1"><n>x</n><a>note</a><d>y</d></s></r>'.bytes(), 'a.xml')!
+	mut me := diff(base.view(rules)!, ours.view(rules)!).apply()!
+	assert me.doc_edit(0).xml() == '<r><s id="1"><n>x</n><a>note</a><d>y</d></s></r>'
+}
+
+fn test_an_ordered_aggregation_keeps_its_interleaved_names() {
+	rules := 'r a,b key=@id ordered\n'
+	old := mview({
+		'a.xml': '<r><a id="1"/><b id="2"/><a id="3"/></r>'
+	}, rules)
+	new := mview({
+		'a.xml': '<r><a id="1"/><b id="2"/><b id="4"/><a id="3"/></r>'
+	}, rules)
+	mut me := diff(old, new).apply()!
+	assert me.doc_edit(0).xml() == '<r><a id="1"/><b id="2"/><b id="4"/><a id="3"/></r>'
+}
+
+fn test_an_added_child_follows_its_rule_past_a_sibling_of_another() {
+	rules := 'r a,c single merge\nr b single merge\n'
+	old := mview({
+		'x.xml': '<r><b/></r>'
+		'y.xml': '<r><c/></r>'
+	}, rules)
+	new := mview({
+		'n.xml': '<r><a/><b/><c/></r>'
+	}, rules)
+	mut me := diff(old, new).apply()!
+	assert me.doc_edit(1).xml() == '<r><a/><c/></r>'
+}
+
+fn test_a_child_found_by_place_stays_before_its_next_sibling_across_rules() {
+	rules := 'r a\nr b single\n'
+	old := mview({
+		'a.xml': '<r><a v="1"/><a v="2"/><b/></r>'
+	}, rules)
+	new := mview({
+		'a.xml': '<r><a v="1"/><b/><a v="3"/><a v="2"/></r>'
+	}, rules)
+	mut me := diff(old, new).apply()!
+	out := me.doc_edit(0).xml()
+	assert out == '<r><a v="1"/><a v="3"/><a v="2"/><b/></r>'
+	assert diff(mview({
+		'a.xml': out
+	}, rules), new).equal()
+}
+
+fn test_a_sorted_child_does_not_wait_for_a_keyless_sibling_of_its_rule() {
+	mut rules := RuleSet{
+		rules: [
+			Rule{
+				parent:  '*'
+				key_fn:  fn (n Node) ?string {
+					return if n.name() == 's' { n.attr('id') } else { none }
+				}
+				keyless: .quiet
+			},
+		]
+	}
+	base := parse_bytes('<r><n/><s id="1"/></r>'.bytes(), 'a.xml')!
+	ours := parse_bytes('<r><n/><s id="1"/><s id="2"/></r>'.bytes(), 'a.xml')!
+	mut me := diff(base.view(rules)!, ours.view(rules)!).apply()!
+	assert me.doc_edit(0).xml() == '<r><n/><s id="1"/><s id="2"/></r>'
+}
+
 fn test_an_ignored_attribute_is_nothing_for_a_removal_to_lose() {
 	rules := '!ignore u\n' + m3_rules
 	base := {
