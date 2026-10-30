@@ -537,6 +537,18 @@ fn (mut a Applier) fill(changes []Change) ! {
 			after_any = holder[s]
 		}
 	}
+	// for each child found in order, the next such sibling of its rule that stayed, by the view
+	mut next_kept := []int{len: hi - lo, init: -1}
+	mut kept_after := map[u32]int{}
+	for s := hi - lo - 1; s >= 0; s-- {
+		n := d.new.node(u32(lo + s))
+		if in_order(d.new, n) {
+			next_kept[s] = kept_after[d.new.rule[n.i]] or { -1 }
+			if holder[s] >= 0 {
+				kept_after[d.new.rule[n.i]] = s
+			}
+		}
+	}
 	mut last_same := map[u32]int{} // a rule -> the document of the last sibling of it passed
 	mut last_any := -1
 	for w, s in order {
@@ -544,6 +556,9 @@ fn (mut a Applier) fill(changes []Change) ! {
 		rule := d.new.rule[n]
 		if s in to_put {
 			c := changes[to_put[s]]
+			if next_kept[s] >= 0 {
+				a.back_before(u32(lo + next_kept[s]), mut spots)
+			}
 			default_doc := if k := last_same[rule] {
 				k
 			} else if next_same[w] >= 0 {
@@ -578,6 +593,20 @@ fn (mut a Applier) fill(changes []Change) ! {
 					}
 				}
 			}
+		}
+	}
+}
+
+// back_before moves the place reached back to new child n that stayed, where the walk has passed
+// it: written order can cross another rule's children, and an addition must stay ahead of it.
+fn (mut a Applier) back_before(n u32, mut spots map[int]Spot) {
+	old := a.d.matched[n] or { return }
+	for f in a.me.fragments(a.d.old.node(old)) {
+		mut sp := spots[f.e.number] or { continue }
+		at := sp.kids.index(f.key)
+		if at >= 0 && at < sp.at {
+			sp.at = at
+			spots[f.e.number] = sp
 		}
 	}
 }
@@ -635,6 +664,12 @@ fn place_order(m &Merged, np MNode, lo int, hi int) []int {
 // sorted_by_key reports whether the view lists child n by its key, not as written.
 fn sorted_by_key(m &Merged, n MNode) bool {
 	return n.keyed() && !m.rules.written && !m.rules.rules[m.rule[n.i]].ordered
+}
+
+// in_order reports whether child n's order among its aggregation is what identifies it or means
+// something: not a single child, and not one the view sorts by key.
+fn in_order(m &Merged, n MNode) bool {
+	return m.kind[n.i] != .single && !sorted_by_key(m, n)
 }
 
 // kid_group is the rule and the element name of a child.

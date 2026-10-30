@@ -513,3 +513,37 @@ fn test_an_added_child_follows_its_rule_past_a_sibling_of_another() {
 	mut me := diff(old, new).apply()!
 	assert me.doc_edit(1).xml() == '<r><a/><c/></r>'
 }
+
+fn test_a_child_found_by_place_stays_before_its_next_sibling_across_rules() {
+	rules := 'r a\nr b single\n'
+	old := mview({
+		'a.xml': '<r><a v="1"/><a v="2"/><b/></r>'
+	}, rules)
+	new := mview({
+		'a.xml': '<r><a v="1"/><b/><a v="3"/><a v="2"/></r>'
+	}, rules)
+	mut me := diff(old, new).apply()!
+	out := me.doc_edit(0).xml()
+	assert out == '<r><a v="1"/><a v="3"/><a v="2"/><b/></r>'
+	assert diff(mview({
+		'a.xml': out
+	}, rules), new).equal()
+}
+
+fn test_a_sorted_child_does_not_wait_for_a_keyless_sibling_of_its_rule() {
+	mut rules := RuleSet{
+		rules: [
+			Rule{
+				parent:  '*'
+				key_fn:  fn (n Node) ?string {
+					return if n.name() == 's' { n.attr('id') } else { none }
+				}
+				keyless: .quiet
+			},
+		]
+	}
+	base := parse_bytes('<r><n/><s id="1"/></r>'.bytes(), 'a.xml')!
+	ours := parse_bytes('<r><n/><s id="1"/><s id="2"/></r>'.bytes(), 'a.xml')!
+	mut me := diff(base.view(rules)!, ours.view(rules)!).apply()!
+	assert me.doc_edit(0).xml() == '<r><n/><s id="1"/><s id="2"/></r>'
+}
