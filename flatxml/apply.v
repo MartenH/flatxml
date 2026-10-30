@@ -501,8 +501,8 @@ mut:
 }
 
 // fill puts the added and moved nodes of one parent in. It walks the new parent's children once,
-// in the order place_order gives: a child that stayed moves each fragment's place past it, and a child to
-// put in goes to its document at the place reached there.
+// in the order place_order gives: a child that stayed moves each fragment's place past it, and a
+// child to put in goes to its document at the place reached there.
 fn (mut a Applier) fill(changes []Change) ! {
 	d := a.d
 	p := changes[0].parent
@@ -525,17 +525,16 @@ fn (mut a Applier) fill(changes []Change) ! {
 	holder := a.holders(np, spots)
 	mut next_same := []int{len: hi - lo, init: -1}
 	mut next_any := []int{len: hi - lo, init: -1}
-	for w := hi - lo - 2; w >= 0; w-- {
-		following := order[w + 1]
-		r := d.new.rule[lo + following]
-		same := d.new.rule[lo + order[w]] == r
-		next_any[w] = if holder[following] >= 0 { holder[following] } else { next_any[w + 1] }
-		next_same[w] = if same && holder[following] >= 0 {
-			holder[following]
-		} else if same {
-			next_same[w + 1]
-		} else {
-			-1
+	mut after_same := map[u32]int{} // a rule -> the document of the nearest sibling of it after w
+	mut after_any := -1
+	for w := hi - lo - 1; w >= 0; w-- {
+		s := order[w]
+		r := d.new.rule[lo + s]
+		next_same[w] = after_same[r] or { -1 }
+		next_any[w] = after_any
+		if holder[s] >= 0 {
+			after_same[r] = holder[s]
+			after_any = holder[s]
 		}
 	}
 	mut last_same := map[u32]int{} // a rule -> the document of the last sibling of it passed
@@ -590,17 +589,18 @@ struct PlacedKid {
 }
 
 // place_order is the offsets of the children lo .. hi of np in the order to put them in. Children
-// with a key are found by it, and the merged view's order means something among those of one
-// rule and element name: they keep it, and go where the first of them is written. A child with no key is found by
-// its place, and the view lists it by its rule, not by that place: it goes where it is written.
-// A parent of several fragments has no one written order and keeps the view's.
+// with a key are found by it, and where their aggregation sorts them the merged view's order means
+// something among those of one rule and element name: they keep it, and go where the first of them
+// is written. Any other child goes where it is written: one with no key is found by its place, and
+// an aggregation in written order has its members interleaved with each other as the view does not
+// show across rules. A parent of several fragments has no one written order and keeps the view's.
 fn place_order(m &Merged, np MNode, lo int, hi int) []int {
 	mut order := []int{cap: hi - lo}
 	mut groups := map[u64][]int{}
 	for s in 0 .. hi - lo {
 		order << s
 		n := m.node(u32(lo + s))
-		if n.keyed() {
+		if sorted_by_key(m, n) {
 			groups[kid_group(m, n)] << s
 		}
 	}
@@ -619,7 +619,7 @@ fn place_order(m &Merged, np MNode, lo int, hi int) []int {
 	mut seen := map[u64]bool{}
 	for kid in kids {
 		n := m.node(u32(lo + kid.offset))
-		if !n.keyed() {
+		if !sorted_by_key(m, n) {
 			placed << kid.offset
 			continue
 		}
@@ -630,6 +630,11 @@ fn place_order(m &Merged, np MNode, lo int, hi int) []int {
 		}
 	}
 	return placed
+}
+
+// sorted_by_key reports whether the view lists child n by its key, not as written.
+fn sorted_by_key(m &Merged, n MNode) bool {
+	return n.keyed() && !m.rules.written && !m.rules.rules[m.rule[n.i]].ordered
 }
 
 // kid_group is the rule and the element name of a child.

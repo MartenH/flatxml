@@ -488,3 +488,28 @@ fn test_a_child_with_no_key_goes_where_it_is_written_under_a_rule_for_every_chil
 	mut me := diff(base.view(rules)!, ours.view(rules)!).apply()!
 	assert me.doc_edit(0).xml() == '<r><s id="1"><n>x</n><a>note</a><d>y</d></s></r>'
 }
+
+fn test_an_ordered_aggregation_keeps_its_interleaved_names() {
+	rules := 'r a,b key=@id ordered\n'
+	old := mview({
+		'a.xml': '<r><a id="1"/><b id="2"/><a id="3"/></r>'
+	}, rules)
+	new := mview({
+		'a.xml': '<r><a id="1"/><b id="2"/><b id="4"/><a id="3"/></r>'
+	}, rules)
+	mut me := diff(old, new).apply()!
+	assert me.doc_edit(0).xml() == '<r><a id="1"/><b id="2"/><b id="4"/><a id="3"/></r>'
+}
+
+fn test_an_added_child_follows_its_rule_past_a_sibling_of_another() {
+	rules := 'r a,c single merge\nr b single merge\n'
+	old := mview({
+		'x.xml': '<r><b/></r>'
+		'y.xml': '<r><c/></r>'
+	}, rules)
+	new := mview({
+		'n.xml': '<r><a/><b/><c/></r>'
+	}, rules)
+	mut me := diff(old, new).apply()!
+	assert me.doc_edit(1).xml() == '<r><a/><c/></r>'
+}
