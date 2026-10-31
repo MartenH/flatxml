@@ -179,7 +179,8 @@ every file that holds it, structure in the file the caller names, each changed f
 to its own path; and a diff is applied to its old view so (`Diff.apply`, `flatxml apply`). Two
 changed versions of one base merge the same way (`merge3`, `flatxml merge3`): what only one side
 changes is taken, the same change on both once, and where they disagree ours is kept and the
-conflict listed, with its place in all three.
+conflict listed, with its place in all three, unless the caller takes theirs there
+(`Merge3Options.take_theirs`). `Doc.source_xml` gives an element as its file has it.
 
 ```v
 import flatxml
