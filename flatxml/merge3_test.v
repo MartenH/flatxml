@@ -596,3 +596,150 @@ fn test_a_namespaced_attribute_is_ignored_by_its_expanded_name() {
 	m2 := merge3(base, removed, changed)!
 	assert m2.clean()
 }
+
+// merged3_taking is merged3, taking theirs where take says so.
+fn merged3_taking(base map[string]string, ours map[string]string, theirs map[string]string, rules string, take fn (c Conflict) bool) (map[string]string, Merge3) {
+	b := mview(base, rules)
+	mut m := merge3(b, mview(ours, rules), mview(theirs, rules), take_theirs: take) or { panic(err) }
+	mut out := map[string]string{}
+	for k, d in b.set.docs {
+		out[d.path] = if e := m.edit.edits[k] {
+			e.xml()
+		} else {
+			unsafe { tos(d.src, d.src_len) }.clone()
+		}
+	}
+	return out, m
+}
+
+fn take_all(_ Conflict) bool {
+	return true
+}
+
+fn test_theirs_can_be_taken_at_each_conflict() {
+	base := {
+		'a.xml': '<r>\n<s id="1" w="0"><v>a</v></s>\n<s id="2"><o id="x"><v>1</v></o></s>\n<s id="3"/></r>'
+	}
+	ours := {
+		'a.xml': '<r>\n<s id="1" w="1"><v>ours</v></s>\n<s id="3"/></r>'
+	}
+	theirs := {
+		'a.xml': '<r>\n<s id="1" w="2"><v>theirs</v></s>\n<s id="2"><o id="x"><v>9</v></o></s>\n<s id="3" w="t"/></r>'
+	}
+	all, m := merged3_taking(base, ours, theirs, m3_rules, take_all)
+	assert m.clean()
+	assert all['a.xml'] == theirs['a.xml']
+	// one kind only: the others stay ours, and are still conflicts
+	some, s := merged3_taking(base, ours, theirs, m3_rules, fn (c Conflict) bool {
+		return c.kind == .text
+	})
+	assert s.conflicts.map(it.kind) == [.attr, .removed]
+	assert some['a.xml'] == '<r>\n<s id="1" w="1"><v>theirs</v></s>\n<s id="3" w="t"/></r>'
+	// none: what merge3 makes without being asked
+	same, n := merged3_taking(base, ours, theirs, m3_rules, fn (_ Conflict) bool {
+		return false
+	})
+	plain, p := merged3(base, ours, theirs, m3_rules)
+	assert same == plain
+	assert n.conflicts.map(it.kind) == p.conflicts.map(it.kind)
+}
+
+fn test_a_removal_of_theirs_takes_all_ours_changed_in_what_goes() {
+	base := {
+		'a.xml': '<r><s id="1"><o id="x"><v>1</v></o><o id="y"><v>2</v></o><o id="z"><v>3</v></o></s><s id="2"><v>a</v></s></r>'
+	}
+	ours := {
+		'a.xml': '<r><s id="1"><o id="x"><v>5</v></o><o id="y"><v>6</v></o><o id="z"><v>7</v></o></s><s id="2"><v>b</v></s></r>'
+	}
+	theirs := {
+		'a.xml': '<r><s id="2"><v>a</v></s></r>'
+	}
+	mut asked := &Refusals{}
+	out, m := merged3_taking(base, ours, theirs, m3_rules, fn [mut asked] (c Conflict) bool {
+		asked.list << c
+		return true
+	})
+	assert m.clean()
+	// the rest of ours stays
+	assert out['a.xml'] == '<r><s id="2"><v>b</v></s></r>'
+	assert asked.list.len == 1
+}
+
+fn test_a_removal_of_ours_gives_back_the_node_with_theirs_changes() {
+	base := {
+		'a.xml': '<r><s id="1"><o id="x"><v>1</v></o></s><s id="2"/></r>'
+	}
+	out, m := merged3_taking(base, {
+		'a.xml': '<r><s id="2"/></r>'
+	}, {
+		'a.xml': '<r><s id="1"><o id="x"><v>9</v></o></s><s id="2"/></r>'
+	}, m3_rules, take_all)
+	assert m.clean()
+	assert out['a.xml'] == '<r><s id="1"><o id="x"><v>9</v></o></s><s id="2"/></r>'
+}
+
+fn test_theirs_can_be_taken_where_a_node_moved_two_ways_or_two_of_one_identity_were_added() {
+	rules := 'r s key=@id merge\ns o key=@id'
+	moved, m := merged3_taking({
+		'a.xml': '<r><s id="1"><o id="x"/></s><s id="2"/><s id="3"/></r>'
+	}, {
+		'a.xml': '<r><s id="1"/><s id="2"><o id="x"/></s><s id="3"/></r>'
+	}, {
+		'a.xml': '<r><s id="1"/><s id="2"/><s id="3"><o id="x"/></s></r>'
+	}, rules, take_all)
+	assert m.clean()
+	assert moved['a.xml'] == '<r><s id="1"></s><s id="2"/><s id="3"><o id="x"/></s></r>'
+	added, a := merged3_taking({
+		'a.xml': '<r></r>'
+	}, {
+		'a.xml': '<r><s id="9" w="o"/></r>'
+	}, {
+		'a.xml': '<r><s id="9" w="t"/></r>'
+	}, rules, take_all)
+	assert a.clean()
+	assert added['a.xml'] == '<r><s id="9" w="t"/></r>'
+}
+
+fn test_taking_theirs_everywhere_leaves_no_conflict() {
+	mut r := MRng{0x9E3779B97F4A7C15}
+	mut asked := 0
+	for round in 0 .. 200 {
+		mut base := []MG{}
+		mut next := 0
+		for i in 0 .. 3 + r.n(5) {
+			mut g := MG{
+				id:   's${i}'
+				w:    '0'
+				v:    'v${r.n(3)}'
+				file: r.n(2)
+				tail: 'b'
+			}
+			for _ in 0 .. r.n(4) {
+				g.os << MO{'o${next}', '${r.n(3)}'}
+				next++
+			}
+			base << g
+		}
+		mut ours, mut theirs := deep(base), deep(base)
+		for k in 0 .. base.len {
+			if !edit_group(mut ours[k], u64(round * 100 + k) * 0x9E3779B97F4A7C15, 'o') {
+				ours[k].id = ''
+			}
+			if !edit_group(mut theirs[k], u64(round * 100 + k + 7) * 0xD1B54A32D192ED03, 't') {
+				theirs[k].id = ''
+			}
+		}
+		mut seen := &Refusals{}
+		out, m := merged3_taking(model_files(base), model_files(ours), model_files(theirs), m3p_rules, fn [mut seen] (c Conflict) bool {
+			seen.list << c
+			return true
+		})
+		assert m.clean(), round.str()
+		asked += seen.list.len
+		// and what it made reads
+		for _, xml in out {
+			parse_bytes(xml.bytes(), 'out.xml') or { assert false, '${round}: ${err}\n${xml}' }
+		}
+	}
+	assert asked > 100
+}

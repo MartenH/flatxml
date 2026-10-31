@@ -310,3 +310,16 @@ fn test_a_plan_writes_one_node_and_copies_the_rest() {
 	e.settle() or { panic(err) }
 	assert e.buf.str() == s.replace('<c  k = "2" >y &amp; z</c>', '<new k="&lt;&amp;&gt;"><c k="2">y &amp; z</c></new>')
 }
+
+fn test_source_xml_is_the_element_as_the_file_has_it() {
+	xml := '<r xmlns="urn:x">\n  <a k="1">\n    <!-- kept -->\n    <b>t</b>\n  </a >\n  <c/>\n  <d>text</d>\n  <e></e>\n</r>\n'
+	d := parse_string(xml)!
+	at := fn [d] (name string) u32 {
+		return d.children(d.root()).filter(!d.is_text(it) && d.name(it) == name)[0]
+	}
+	assert d.source_xml(at('a')) == '<a k="1">\n    <!-- kept -->\n    <b>t</b>\n  </a >'
+	assert d.source_xml(at('c')) == '<c/>'
+	assert d.source_xml(at('d')) == '<d>text</d>'
+	assert d.source_xml(at('e')) == '<e></e>'
+	assert d.source_xml(d.root()) == xml.trim_space()
+}
